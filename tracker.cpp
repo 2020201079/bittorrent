@@ -8,8 +8,50 @@
 #include<netdb.h>
 #include<arpa/inet.h>
 #include<iostream>
+#include<vector>
+#include<pthread.h>
 
 #define MAXDATASIZE 300 // max number of bytes we can get at once
+
+std::string getStringFromSocket(int new_fd){
+
+    char buf[MAXDATASIZE];
+    int numbytes;
+    if((numbytes = recv(new_fd,buf,MAXDATASIZE-1,0))==-1){
+        printf("error recienving string");
+        exit(1);
+    }
+    
+    buf[numbytes] = '\0';
+    std::string recvString(buf);
+    std::cout<<recvString<<std::endl;
+    return recvString;
+}
+
+int acceptTorFileFromPeer(int new_fd){
+
+    std::string fileName = getStringFromSocket(new_fd);
+    std::cout<<fileName<<std::endl;
+
+    std::string filePath = getStringFromSocket(new_fd);
+    std::cout<<filePath<<std::endl;
+
+    std::string countHashBlocksStr = getStringFromSocket(new_fd);
+    std::cout<<"Number of blocks "<<countHashBlocksStr<<std::endl;
+    int countHashBlocks = std::stoi(countHashBlocksStr);
+
+    std::vector<std::pair<int,std::string>> hashBlocks;
+    for(int i=0;i<countHashBlocks;i++){
+        std::string blockSizeStr = getStringFromSocket(new_fd);
+        int blockSize = std::stoi(blockSizeStr);
+
+        std::string hash = getStringFromSocket(new_fd);
+        hashBlocks.push_back({blockSize,hash});
+    }
+
+    std::cout<<"hash blocks recvd size is: "<<hashBlocks.size()<<std::endl;
+    return 0;
+}
 
 int main(int argc,char *argv[]){
     int sock_fd,new_fd;
@@ -33,7 +75,6 @@ int main(int argc,char *argv[]){
     }
 
     if(bind(sock_fd,res->ai_addr,res->ai_addrlen) == -1){
-        
         printf("bind failed dmm it\n");
         exit(1);
     }
@@ -57,30 +98,7 @@ int main(int argc,char *argv[]){
         inet_ntop(client_address.ss_family,&((struct sockaddr_in *)&client_address)->sin_addr,s,sizeof s);
         printf("Server got connection from %s\n",s);
 
-        char bufFileName[MAXDATASIZE];
-        int numbytesFileName;
-        if((numbytesFileName = recv(new_fd,bufFileName,MAXDATASIZE-1,0))==-1){
-            printf("error recienving file name");
-            exit(1);
-        }
-        
-        bufFileName[numbytesFileName] = '\0';
-        std::string filename(bufFileName);
-        printf("tracker recieved file name %s\n",bufFileName);
-        std::cout<<filename<<std::endl;
-        //free(bufFileName);
-
-        char bufFilePath[MAXDATASIZE];
-        int numbytesFilePath;
-        if((numbytesFilePath = recv(new_fd,bufFilePath,MAXDATASIZE-1,0))==-1){
-            printf("error recienving file path");
-            exit(1);
-        }
-
-        bufFilePath[numbytesFilePath] = '\0';
-        std::string filePath(bufFilePath);
-        printf("tracker recieved file path %s",bufFilePath);
-        std::cout<<filePath<<std::endl;
+        acceptTorFileFromPeer(new_fd);
 
     }
     close(new_fd);
