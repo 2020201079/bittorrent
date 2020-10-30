@@ -18,6 +18,39 @@ int blockSize = 512*1024;
 int hashOutputSize = 20;
 std::string portNoToShareFiles;
 
+int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
+    std::cout<<"port of tracker is "<<std::string(portOfTracker)<<std::endl;
+    int sock_fd,new_fd;
+    struct addrinfo  hints,*res;
+
+    memset(&hints,0,sizeof hints);
+    hints.ai_family = AF_INET; // ipv4
+    hints.ai_socktype = SOCK_STREAM; // for tcp
+
+    if(getaddrinfo(trackerIP,portOfTracker,&hints,&res) != 0){
+        std::cout<<std::string(trackerIP)<<std::endl;
+        std::cout<<std::string(trackerIP)<<std::endl;
+        printf("Get addr info failed \n");
+        exit(1);
+    }
+
+    sock_fd = socket(res->ai_family,res->ai_socktype,res->ai_protocol);
+
+    if(connect(sock_fd,res->ai_addr,res->ai_addrlen) == -1){
+        close(sock_fd);
+        printf("connect failed \n");
+        exit(1);
+    }
+
+    char s[INET6_ADDRSTRLEN];
+    inet_ntop(res->ai_family,&((struct sockaddr_in *)res->ai_addr)->sin_addr,s,sizeof s);
+    printf("peer connected to tracker %s\n",s);
+
+    freeaddrinfo(res); // no need of this struct after connecting
+
+    return sock_fd;
+}
+
 
 std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
     std::vector<std::pair<int,std::string>> hashBlocks(0);
@@ -60,6 +93,7 @@ std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
                 hashString += std::to_string((int) obuf[i]);
             }
             hashBlocks.push_back({sizeOfLastBlock,currHashString});
+            free(buf);
         }
         else{
             void* buf = malloc(blockSize);
@@ -72,6 +106,7 @@ std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
                 hashString += std::to_string((int) obuf[i]);
             }
             hashBlocks.push_back({blockSize,currHashString});
+            free(buf);
         }
     }
     close(fd);
@@ -79,39 +114,25 @@ std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
     return hashBlocks;
 }
 
-int upload_file(std::string filePath,const char* trackerIP,const char* portOfTracker){
+int upload_file(std::string filePath,const char* trackerIP,const char* portOfTracker,std::string peerAddr){
     std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
     std::vector<std::pair<int,std::string>> hashBlocks = getHashOfFile(filePath);
     int noOfBlocks = hashBlocks.size();
 
-    int sock_fd,new_fd;
-    struct addrinfo  hints,*res;
-
-    memset(&hints,0,sizeof hints);
-    hints.ai_family = AF_INET; // ipv4
-    hints.ai_socktype = SOCK_STREAM; // for tcp
-
-    if(getaddrinfo(trackerIP,portOfTracker,&hints,&res) != 0){
-        std::cout<<std::string(trackerIP)<<std::endl;
-        std::cout<<std::string(trackerIP)<<std::endl;
-        printf("Get addr info failed \n");
-        exit(1);
-    }
-
-    sock_fd = socket(res->ai_family,res->ai_socktype,res->ai_protocol);
-
-    printf(" sock_fd is %d\n",sock_fd); 
-    if(connect(sock_fd,res->ai_addr,res->ai_addrlen) == -1){
+    int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
+    //send command
+    if (send(sock_fd,"upload_file",sizeof "upload_file",0) == -1){
+        printf("sendind command upload_file failed \n");
         close(sock_fd);
-        printf("connect failed \n");
         exit(1);
     }
 
-    char s[INET6_ADDRSTRLEN];
-    inet_ntop(res->ai_family,&((struct sockaddr_in *)res->ai_addr)->sin_addr,s,sizeof s);
-    printf("peer connected to tracker %s\n",s);
-
-    freeaddrinfo(res); // no need of this struct after connecting
+    //send peerAddress
+    if (send(sock_fd,peerAddr.c_str(),peerAddr.size(),0) == -1){
+        printf("sendind peer addr failed \n");
+        close(sock_fd);
+        exit(1);
+    }
 
     //send fileName
     if (send(sock_fd,fileName.c_str(),fileName.size(),0) == -1){
@@ -152,51 +173,83 @@ int upload_file(std::string filePath,const char* trackerIP,const char* portOfTra
     return 0;
 }
 
-void * fileSharer(void* vargp){ // keep listenning for download request by other peers
-    int sock_fd,new_fd;
-    struct addrinfo hints, *res;
-
-    memset(&hints,0,sizeof hints);
-    hints.ai_family = AF_INET; // ipv4
-    hints.ai_socktype = SOCK_STREAM; // for tcp
-
-    if(getaddrinfo("127.0.0.1",portNoToShareFiles.c_str(),&hints,&res) != 0 ){
-        printf("socket failed \n");
-        exit(1);
+int sendString(std::string msg,int sock_fd){
+    //always sending strings of length 100 atleast
+    int packetSize = 100; // this is same in both peer and tracker
+    char buf[packetSize] = {0};
+    for(int i=0;i<packetSize;i++){
+        buf[i] = msg[i];
     }
-
-    sock_fd = socket(res->ai_family,res->ai_socktype,res->ai_protocol);
-    if(sock_fd <= 0){
-        printf("socket failed \n");
-        exit(1);
-    }
-
-    if(bind(sock_fd,res->ai_addr,res->ai_addrlen) == -1){
-        printf("bind failed dmm it\n");
-        exit(1);
-    }
-
-    freeaddrinfo(res);
-
-    if(listen(sock_fd,10)==-1){
-        printf("listen failed \n");
-        exit(1);
-    }
-
-    while(1){
-        struct sockaddr_storage client_address;
-        socklen_t sin_size = sizeof client_address;
-        new_fd = accept(sock_fd,(struct sockaddr *)&client_address,&sin_size);
-        if(new_fd == -1){
-            perror("accet");
-            continue;
+    size_t total =0;
+    int len = packetSize;
+    while (total != len){
+        int nb = send(sock_fd,buf+total,len-total,0);
+        if(nb == -1){
+            std::cout<<" sending failed"<<std::endl;
+            exit(1);
         }
-        char s[INET6_ADDRSTRLEN];
-        inet_ntop(client_address.ss_family,&((struct sockaddr_in *)&client_address)->sin_addr,s,sizeof s);
-        printf("peer got connection from %s\n",s);
-
+        total += nb;
     }
 }
+
+int create_user(const char* trackerIP,const char* portOfTracker,std::string user_id,std::string passwd){
+    std::string filePath = "test.txt";
+    //std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
+    //std::vector<std::pair<int,std::string>> hashBlocks = getHashOfFile(filePath);
+    //int fd = open(filePath.c_str(),O_RDONLY);
+    //int noOfBlocks = hashBlocks.size();
+
+    int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
+    std::cout<<"sock_fd : "<<sock_fd<<std::endl;
+    //send command
+
+    //int status = sendString("create_user",sock_fd);
+
+    
+    if (send(sock_fd,"create_user",sizeof "create_user",0) == -1){
+        printf("sending command create_user failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+
+    int dummySize = 10;
+    char buf[dummySize] = {0}; // dummy recieve
+    int numbytes;
+    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
+        printf("error reading data");
+        exit(1);
+    }
+
+    //sendString(user_id,sock_fd);
+    if(send(sock_fd,user_id.c_str(),user_id.size(),0) == -1){
+        printf("sendind user_id failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+
+    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
+        printf("error reading data");
+        exit(1);
+    }
+
+    //send fileName
+    //sendString(passwd,sock_fd);
+    if (send(sock_fd,passwd.c_str(),passwd.size(),0) == -1){
+        printf("sendind passwd failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+
+    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
+        printf("error reading data");
+        exit(1);
+    }
+
+    close(sock_fd);
+    std::cout<<"user created"<<std::endl;
+    return 0;
+}
+
 
 int main(int argc,char* argv[]){
     if(argc != 3){
@@ -221,7 +274,7 @@ int main(int argc,char* argv[]){
     std::string portNoToShareFiles = peerPort;
 
     pthread_t threadToSendFile;
-    pthread_create(&threadToSendFile,NULL,fileSharer,NULL);
+    //pthread_create(&threadToSendFile,NULL,fileSharer,NULL);
 
     std::cout<<"Thread created for listenning "<<std::endl;
 
@@ -232,11 +285,17 @@ int main(int argc,char* argv[]){
             std::string filePath;
             std::cin>>filePath;
             int groupid;std::cin>>groupid;
-            upload_file(filePath,tracker1IP.c_str(),tracker1Port.c_str());
+            upload_file(filePath,tracker1IP.c_str(),tracker1Port.c_str(),peerAddr);
         }
 
         else if(command == "download_file"){
             std::cout<<"called download file"<<std::endl;
+        }
+
+        else if(command == "create_user"){
+            std::string user_id;std::cin>>user_id;
+            std::string passwd; std::cin>>passwd;
+            create_user(tracker1IP.c_str(),tracker1Port.c_str(),user_id,passwd);
         }
 
         else{
