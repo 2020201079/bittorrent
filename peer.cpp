@@ -51,6 +51,15 @@ int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
     return sock_fd;
 }
 
+int dummyRecv(int sock_fd){
+    int dummySize = 10;
+    char buf[dummySize] = {0}; // dummy recieve
+    int numbytes;
+    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
+        printf("error reading data");
+        exit(1);
+    }
+}
 
 std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
     std::vector<std::pair<int,std::string>> hashBlocks(0);
@@ -212,13 +221,7 @@ int create_user(const char* trackerIP,const char* portOfTracker,std::string user
         exit(1);
     }
 
-    int dummySize = 10;
-    char buf[dummySize] = {0}; // dummy recieve
-    int numbytes;
-    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
-        printf("error reading data");
-        exit(1);
-    }
+    dummyRecv(sock_fd);
 
     //sendString(user_id,sock_fd);
     if(send(sock_fd,user_id.c_str(),user_id.size(),0) == -1){
@@ -227,10 +230,7 @@ int create_user(const char* trackerIP,const char* portOfTracker,std::string user
         exit(1);
     }
 
-    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
-        printf("error reading data");
-        exit(1);
-    }
+    dummyRecv(sock_fd);
 
     //send fileName
     //sendString(passwd,sock_fd);
@@ -240,10 +240,7 @@ int create_user(const char* trackerIP,const char* portOfTracker,std::string user
         exit(1);
     }
 
-    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
-        printf("error reading data");
-        exit(1);
-    }
+    dummyRecv(sock_fd);
 
     close(sock_fd);
     std::cout<<"user created"<<std::endl;

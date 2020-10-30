@@ -56,6 +56,16 @@ std::string getStringFromSocket(int new_fd){
     return recvString;
 }
 
+int dummySend(int new_fd){
+    int dummySize = 10;
+    char buf[dummySize] ={0};
+    if(send(new_fd,buf,dummySize,0) == -1){ //dummysend
+        printf("sendind user_id failed \n");
+        close(new_fd);
+        exit(1);
+    }
+}
+
 int acceptTorFileFromPeer(int new_fd){
 
     std::string peerAddr = getStringFromSocket(new_fd);
@@ -87,31 +97,17 @@ int acceptTorFileFromPeer(int new_fd){
 
 int create_new_user(int new_fd){
 
-    int dummySize = 10;
-    char buf[dummySize] ={0};
-    if(send(new_fd,buf,dummySize,0) == -1){ //dummysend
-        printf("sendind user_id failed \n");
-        close(new_fd);
-        exit(1);
-    }
+    dummySend(new_fd);
 
     std::string user_id = getStringFromSocket(new_fd);
     std::cout<<"user_id : "<<user_id<<std::endl;
 
-    if(send(new_fd,buf,dummySize,0) == -1){ //dummysend
-        printf("sendind user_id failed \n");
-        close(new_fd);
-        exit(1);
-    }
+    dummySend(new_fd);
 
     std::string passwd = getStringFromSocket(new_fd);
     std::cout<<"passwd: "<<passwd<<std::endl;
 
-    if(send(new_fd,buf,dummySize,0) == -1){ //dummy send
-        printf("sendind user_id failed \n");
-        close(new_fd);
-        exit(1);
-    }
+    dummySend(new_fd);
 
     Peer peer = Peer(user_id,passwd,"-1"); // setting group as -1 for now
     peerList.push_back(peer);
