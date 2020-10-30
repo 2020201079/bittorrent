@@ -35,27 +35,6 @@ class Peer{
 
 std::vector<Peer> peerList;
 
-std::string getStringFromSocket(int new_fd){
-    char buf[MAXDATASIZE] = {0};
-    int numbytes;
-
-    if((numbytes = recv(new_fd,buf,MAXDATASIZE-1,0))==-1){
-        printf("error recienving string");
-        exit(1);
-    }
-
-    buf[numbytes] = '\0';
-    for(int i=0;i<numbytes;i++){
-        std::cout<<buf[i]<<" ";
-    }
-    std::cout<<std::endl;
-    std::string recvString(buf);
-    std::cout<<"Num of bytes recvd: "<<numbytes<<std::endl;
-    std::cout<<"getString func : "<<recvString<<std::endl;
-    fflush(stdout);
-    return recvString;
-}
-
 int dummySend(int new_fd){
     int dummySize = 10;
     char buf[dummySize] ={0};
@@ -65,6 +44,21 @@ int dummySend(int new_fd){
         exit(1);
     }
 }
+
+std::string getStringFromSocket(int new_fd){ //after recieving also sends a dummySend
+    char buf[MAXDATASIZE] = {0};
+    int numbytes;
+
+    if((numbytes = recv(new_fd,buf,MAXDATASIZE-1,0))==-1){
+        printf("error recienving string");
+        exit(1);
+    }
+    std::string recvString(buf);
+    fflush(stdout);
+    dummySend(new_fd);
+    return recvString;
+}
+
 
 int acceptTorFileFromPeer(int new_fd){
 
@@ -91,28 +85,20 @@ int acceptTorFileFromPeer(int new_fd){
     }
 
     std::cout<<"hash blocks recvd size is: "<<hashBlocks.size()<<std::endl;
-    fflush(stdout);
     return 0;
 }
 
 int create_new_user(int new_fd){
 
-    dummySend(new_fd);
-
     std::string user_id = getStringFromSocket(new_fd);
     std::cout<<"user_id : "<<user_id<<std::endl;
-
-    dummySend(new_fd);
 
     std::string passwd = getStringFromSocket(new_fd);
     std::cout<<"passwd: "<<passwd<<std::endl;
 
-    dummySend(new_fd);
-
     Peer peer = Peer(user_id,passwd,"-1"); // setting group as -1 for now
     peerList.push_back(peer);
     std::cout<<"end of create_user"<<std::endl;
-    fflush(stdout);
     return 0;
 }
 
