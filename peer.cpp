@@ -188,12 +188,12 @@ std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
     return hashBlocks;
 }
 
-int upload_file(std::string filePath,const char* trackerIP,const char* portOfTracker,std::string peerAddr){
+int upload_file(int sock_fd,std::string filePath,std::string peerAddr){
     std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
     std::vector<std::pair<int,std::string>> hashBlocks = getHashOfFile(filePath);
     int noOfBlocks = hashBlocks.size();
 
-    int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
+    //int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
     //send command
     if (send(sock_fd,"upload_file",sizeof "upload_file",0) == -1){
         printf("sendind command upload_file failed \n");
@@ -232,7 +232,7 @@ int upload_file(std::string filePath,const char* trackerIP,const char* portOfTra
 
     //send number of blocks
     if (send(sock_fd,std::to_string(noOfBlocks).c_str(),std::to_string(noOfBlocks).size(),0) == -1){
-        printf("sendind number of blocks failed \n");
+        printf("sending number of blocks failed \n");
         close(sock_fd);
         exit(1);
     }
@@ -241,27 +241,27 @@ int upload_file(std::string filePath,const char* trackerIP,const char* portOfTra
 
     for(auto p : hashBlocks){
         if (send(sock_fd,std::to_string(p.first).c_str(),std::to_string(p.first).size(),0) == -1){
-            printf("sendind the block size failed \n");
+            printf("sending the block size failed \n");
             close(sock_fd);
             exit(1);
         }
         dummyRecv(sock_fd);
         if (send(sock_fd,p.second.c_str(),p.second.size(),0) == -1){
-            printf("sendind a hash block failed \n");
+            printf("sending a hash block failed \n");
             close(sock_fd);
             exit(1);
         }
         dummyRecv(sock_fd);
     }
 
-    close(sock_fd);
+    //close(sock_fd);
     std::cout<<"file shared"<<std::endl;
     return 0;
 }
 
-int create_user(const char* trackerIP,const char* portOfTracker,std::string user_id,std::string passwd){
+int create_user(int sock_fd,std::string user_id,std::string passwd){
 
-    int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
+    //int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
     std::cout<<"sock_fd : "<<sock_fd<<std::endl;
     
     if (send(sock_fd,"create_user",sizeof "create_user",0) == -1){
@@ -312,7 +312,7 @@ int create_user(const char* trackerIP,const char* portOfTracker,std::string user
     else{
         std::cout<<"User already exists"<<std::endl;
     }
-    close(sock_fd);
+    //close(sock_fd);
     return 0;
 }
 
@@ -363,14 +363,14 @@ int main(int argc,char* argv[]){
     pthread_create(&threadToSendFile,NULL,fileSharer,NULL);
 
     std::cout<<"Thread created for listenning "<<std::endl;
-
+    int sock_fd = makeConnectionToTracker(tracker1IP.c_str(),tracker1Port.c_str());
     while(1){
         std::string command;std::cin>>command;
         if(command == "upload_file"){
             std::string filePath;
             std::cin>>filePath;
             int groupid;std::cin>>groupid;
-            upload_file(filePath,tracker1IP.c_str(),tracker1Port.c_str(),peerAddr);
+            upload_file(sock_fd,filePath,peerAddr);
         }
 
         else if(command == "download_file"){
@@ -380,7 +380,7 @@ int main(int argc,char* argv[]){
         else if(command == "create_user"){
             std::string user_id;std::cin>>user_id;
             std::string passwd; std::cin>>passwd;
-            create_user(tracker1IP.c_str(),tracker1Port.c_str(),user_id,passwd);
+            create_user(sock_fd,user_id,passwd);
         }
 
         else if(command == "connect"){ // just for testing purposes
@@ -396,6 +396,8 @@ int main(int argc,char* argv[]){
 
         else{
             std::cout<<"Not a valid command "<<std::endl;
+            std::cin.clear();
+            std::cout.clear();
         }
     }
     return 0;
