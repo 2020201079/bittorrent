@@ -38,6 +38,8 @@ class Peer{
 
 std::unordered_map<std::string,Peer*> peerMap;
 
+pthread_mutex_t lockPeerMap;
+
 int makeServer(std::string ip,std::string port){
     int sock_fd;
     struct addrinfo hints, *res;
@@ -115,7 +117,6 @@ std::string getStringFromSocket(int new_fd){ //after recieving also sends a dumm
     return recvString;
 }
 
-
 int acceptTorFileFromPeer(int new_fd){
 
     std::string peerAddr = getStringFromSocket(new_fd);
@@ -144,6 +145,21 @@ int acceptTorFileFromPeer(int new_fd){
     return 0;
 }
 
+std::string updatePeerMap(Peer* peer,std::string user_id){
+    pthread_mutex_lock(&lockPeerMap);
+    std::string status;
+    if(peerMap.find(user_id) == peerMap.end()){
+        peerMap[user_id] = peer;
+        status = "user created";
+    }
+    else{
+        status ="userid exists";
+    }
+    pthread_mutex_unlock(&lockPeerMap);
+    std::cout<<"Number of users :"<<peerMap.size()<<std::endl;
+    return status;
+}
+
 int create_new_user(int new_fd){
 
     std::string user_id = getStringFromSocket(new_fd);
@@ -156,6 +172,8 @@ int create_new_user(int new_fd){
 
     Peer* peer = new Peer(user_id,passwd,ip,port); 
     
+    std::string status = updatePeerMap(peer,user_id);
+    /*
     std::string status;
     if(peerMap.find(user_id) == peerMap.end()){
         peerMap[user_id] = peer;
@@ -163,7 +181,7 @@ int create_new_user(int new_fd){
     }
     else{
         status ="userid exists";
-    }
+    }*/
 
     if(send(new_fd,status.c_str(),status.size(),0) == -1){
         printf("sending success signal failed in create user \n");
@@ -206,6 +224,7 @@ void* serviceToPeer(void* i){
     }
     close(new_fd);
 }
+
 int main(int argc,char *argv[]){
     if(argc != 2){
         printf("./tracker tracker_info.txt");
@@ -224,40 +243,7 @@ int main(int argc,char *argv[]){
     std::string tracker2IP = tracker2.substr(0,tracker1.find_last_of(":"));
 
     int sock_fd = makeServer(tracker1IP,tracker1Port);
-    /*
-    int sock_fd,new_fd;
-    struct addrinfo hints, *res;
 
-    memset(&hints,0,sizeof hints);
-    hints.ai_family = AF_INET; // ipv4
-    hints.ai_socktype = SOCK_STREAM; // for tcp
-
-
-    if(getaddrinfo(tracker1IP.c_str(),tracker1Port.c_str(),&hints,&res) != 0 ){
-        printf("socket failed \n");
-        exit(1);
-    }
-
-    // make a socket
-    sock_fd = socket(res->ai_family,res->ai_socktype,res->ai_protocol);
-    if(sock_fd <= 0){
-        printf("socket failed \n");
-        exit(1);
-    }
-
-    if(bind(sock_fd,res->ai_addr,res->ai_addrlen) == -1){
-        std::cout<<"sock_fd is :"<<sock_fd<<std::endl;
-        std::cout<<"ai_addr is "<<res->ai_addr<<std::endl;
-        printf("bind failed \n");
-        exit(1);
-    }
-
-    freeaddrinfo(res);
-
-    if(listen(sock_fd,10)==-1){
-        printf("listen failed \n");
-        exit(1);
-    }*/
     int new_fd;
     while(1){
         struct sockaddr_storage client_address;
@@ -287,17 +273,3 @@ int main(int argc,char *argv[]){
     }
     close(new_fd);
 }
-
-
-/*
-now want to send this file name, file path, hash , size of file, number of chunks  to tracker
-
-on recieving share request
-
-should get the following details
-
-1) file name
-2) file path
-3) hash
-4) size of file -> can calculate the chunks and distribution
-*/
