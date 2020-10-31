@@ -12,6 +12,7 @@
 #include<pthread.h>
 #include<fstream>
 #include<fcntl.h>
+#include<unordered_map>
 
 #define MAXDATASIZE 100 // max number of bytes we can get at once
 
@@ -25,15 +26,17 @@ class Peer{
         public:
             std::string id;
             std::string password;
-            std::string groupId;
-            Peer(std::string id,std::string password,std::string groupId){
+            std::string IP;
+            std::string port;
+            Peer(std::string id,std::string password,std::string ip,std::string port){
                 this->id = id;
                 this->password = password;
-                this->groupId = groupId;
+                this->IP = ip;
+                this->port = port;
             }
 };
 
-std::vector<Peer> peerList;
+std::unordered_map<std::string,Peer*> peerMap;
 
 int dummySend(int new_fd){
     int dummySize = 10;
@@ -43,6 +46,18 @@ int dummySend(int new_fd){
         close(new_fd);
         exit(1);
     }
+    return 0;
+}
+
+int dummyRecv(int sock_fd){
+    int dummySize = 10;
+    char buf[dummySize] = {0}; // dummy recieve
+    int numbytes;
+    if((numbytes = recv(sock_fd,buf,dummySize,0))==-1){ //dummy read
+        printf("error reading data");
+        exit(1);
+    }
+    return 0;
 }
 
 std::string getStringFromSocket(int new_fd){ //after recieving also sends a dummySend
@@ -91,13 +106,31 @@ int acceptTorFileFromPeer(int new_fd){
 int create_new_user(int new_fd){
 
     std::string user_id = getStringFromSocket(new_fd);
-    std::cout<<"user_id : "<<user_id<<std::endl;
 
     std::string passwd = getStringFromSocket(new_fd);
-    std::cout<<"passwd: "<<passwd<<std::endl;
 
-    Peer peer = Peer(user_id,passwd,"-1"); // setting group as -1 for now
-    peerList.push_back(peer);
+    std::string ip = getStringFromSocket(new_fd);
+
+    std::string port = getStringFromSocket(new_fd);
+
+    Peer* peer = new Peer(user_id,passwd,ip,port); 
+    
+    std::string status;
+    if(peerMap.find(user_id) == peerMap.end()){
+        peerMap[user_id] = peer;
+        status = "user created";
+    }
+    else{
+        status ="userid exists";
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending success signal failed in create user \n");
+        close(new_fd);
+        exit(1);
+    }
+    dummyRecv(new_fd);
+
     std::cout<<"end of create_user"<<std::endl;
     return 0;
 }
@@ -177,6 +210,10 @@ int main(int argc,char *argv[]){
             std::cout<<"create user called "<<std::endl;
             //create_user(new_fd);
             create_new_user(new_fd);
+        }
+
+        else if(command == "login"){
+            
         }
         else{
             std::cout<<"Tracker got unknown request"<<std::endl;

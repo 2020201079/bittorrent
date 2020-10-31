@@ -18,7 +18,7 @@
 int blockSize = 512*1024;
 int hashOutputSize = 20;
 std::string portNoToShareFiles;
-std::string IPTolisten = "127.0.0.1";
+std::string IPTolisten;
 
 int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
     std::cout<<"port of tracker is "<<std::string(portOfTracker)<<std::endl;
@@ -259,33 +259,10 @@ int upload_file(std::string filePath,const char* trackerIP,const char* portOfTra
     return 0;
 }
 
-int sendString(std::string msg,int sock_fd){
-    //always sending strings of length 100 atleast
-    int packetSize = 100; // this is same in both peer and tracker
-    char buf[packetSize] = {0};
-    for(int i=0;i<packetSize;i++){
-        buf[i] = msg[i];
-    }
-    size_t total =0;
-    int len = packetSize;
-    while (total != len){
-        int nb = send(sock_fd,buf+total,len-total,0);
-        if(nb == -1){
-            std::cout<<" sending failed"<<std::endl;
-            exit(1);
-        }
-        total += nb;
-    }
-}
-
 int create_user(const char* trackerIP,const char* portOfTracker,std::string user_id,std::string passwd){
 
     int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
     std::cout<<"sock_fd : "<<sock_fd<<std::endl;
-    //send command
-
-    //int status = sendString("create_user",sock_fd);
-
     
     if (send(sock_fd,"create_user",sizeof "create_user",0) == -1){
         printf("sending command create_user failed \n");
@@ -311,11 +288,31 @@ int create_user(const char* trackerIP,const char* portOfTracker,std::string user
         close(sock_fd);
         exit(1);
     }
-
     dummyRecv(sock_fd);
 
+    if(send(sock_fd,IPTolisten.c_str(),IPTolisten.size(),0) == -1){
+        printf("sending ip of client failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    if(send(sock_fd,portNoToShareFiles.c_str(),portNoToShareFiles.size(),0) == -1){
+        printf("sending port of client failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    std::string status = getStringFromSocket(sock_fd);
+
+    if(status == "user created"){
+        std::cout<<"User created"<<std::endl;
+    }
+    else{
+        std::cout<<"User already exists"<<std::endl;
+    }
     close(sock_fd);
-    std::cout<<"user created"<<std::endl;
     return 0;
 }
 
@@ -360,6 +357,7 @@ int main(int argc,char* argv[]){
     std::string peerPort = peerAddr.substr(peerAddr.find_last_of(":")+1);
     std::string peerIP = peerAddr.substr(0,peerAddr.find_last_of(":"));
     portNoToShareFiles = peerPort;
+    IPTolisten = peerIP;
 
     pthread_t threadToSendFile;
     pthread_create(&threadToSendFile,NULL,fileSharer,NULL);
@@ -385,7 +383,7 @@ int main(int argc,char* argv[]){
             create_user(tracker1IP.c_str(),tracker1Port.c_str(),user_id,passwd);
         }
 
-        else if(command == "connect"){
+        else if(command == "connect"){ // just for testing purposes
             std::string IP,port;std::cin>>IP>>port;
             int sock_fd = makeConnectionToTracker(IP.c_str(),port.c_str());
             if(send(sock_fd,"hello thread",sizeof "hello thread",0) == -1){
