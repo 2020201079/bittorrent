@@ -259,6 +259,34 @@ int upload_file(int sock_fd,std::string filePath,std::string peerAddr){
     return 0;
 }
 
+int login(int sock_fd,std::string user_id,std::string passwd){
+    if (send(sock_fd,"login",sizeof "login",0) == -1){
+        printf("sending command login failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+
+    dummyRecv(sock_fd);
+
+    if(send(sock_fd,user_id.c_str(),user_id.size(),0) == -1){
+        printf("sendind user_id failed for login \n");
+        close(sock_fd);
+        exit(1);
+    }
+
+    dummyRecv(sock_fd);
+
+    if (send(sock_fd,passwd.c_str(),passwd.size(),0) == -1){
+        printf("sendind passwd failed for login \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
+}
 int create_user(int sock_fd,std::string user_id,std::string passwd){
 
     //int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
@@ -281,7 +309,6 @@ int create_user(int sock_fd,std::string user_id,std::string passwd){
 
     dummyRecv(sock_fd);
 
-    //send fileName
     //sendString(passwd,sock_fd);
     if (send(sock_fd,passwd.c_str(),passwd.size(),0) == -1){
         printf("sendind passwd failed \n");
@@ -312,9 +339,10 @@ int create_user(int sock_fd,std::string user_id,std::string passwd){
     else{
         std::cout<<"User already exists"<<std::endl;
     }
-    //close(sock_fd);
     return 0;
 }
+
+
 
 void* fileSharer(void* argv){
     int sock_fd = makeServer(IPTolisten,portNoToShareFiles);
@@ -383,6 +411,12 @@ int main(int argc,char* argv[]){
             create_user(sock_fd,user_id,passwd);
         }
 
+        else if(command == "login"){
+            std::string user_id;std::cin>>user_id;
+            std::string passwd; std::cin>>passwd;
+            login(sock_fd,user_id,passwd);
+        }
+
         else if(command == "connect"){ // just for testing purposes
             std::string IP,port;std::cin>>IP>>port;
             int sock_fd = makeConnectionToTracker(IP.c_str(),port.c_str());
@@ -402,13 +436,3 @@ int main(int argc,char* argv[]){
     }
     return 0;
 }
-
-    /*now want to send this file name, file path, hash , size of file, number of chunks  to tracker
-    // things to share with tracker
-    1) file name
-    2) file path
-    3) hash
-    4) size of file -> can calculate the chunks and distribution
-    5) Port on which client is listenning for other peers to download
-    6) 
-    */

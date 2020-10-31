@@ -28,6 +28,7 @@ class Peer{
             std::string password;
             std::string IP;
             std::string port;
+            bool loggedIn = false;
             Peer(std::string id,std::string password,std::string ip,std::string port){
                 this->id = id;
                 this->password = password;
@@ -146,7 +147,9 @@ int acceptTorFileFromPeer(int new_fd){
 }
 
 std::string updatePeerMap(Peer* peer,std::string user_id){
+    std::cout<<"update peer map called"<<std::endl;
     pthread_mutex_lock(&lockPeerMap);
+    std::cout<<"entered critical section "<<std::endl;
     std::string status;
     if(peerMap.find(user_id) == peerMap.end()){
         peerMap[user_id] = peer;
@@ -156,6 +159,7 @@ std::string updatePeerMap(Peer* peer,std::string user_id){
         status ="userid exists";
     }
     pthread_mutex_unlock(&lockPeerMap);
+    std::cout<<"out of critical section "<<std::endl;
     std::cout<<"Number of users :"<<peerMap.size()<<std::endl;
     return status;
 }
@@ -163,25 +167,21 @@ std::string updatePeerMap(Peer* peer,std::string user_id){
 int create_new_user(int new_fd){
 
     std::string user_id = getStringFromSocket(new_fd);
+    std::cout<<"user id :"<<user_id<<std::endl;
 
     std::string passwd = getStringFromSocket(new_fd);
+    std::cout<<"passwd :"<<passwd<<std::endl;
 
     std::string ip = getStringFromSocket(new_fd);
+    std::cout<<"ip :"<<ip<<std::endl;
 
     std::string port = getStringFromSocket(new_fd);
+    std::cout<<"port :"<<port<<std::endl;
 
     Peer* peer = new Peer(user_id,passwd,ip,port); 
     
     std::string status = updatePeerMap(peer,user_id);
-    /*
-    std::string status;
-    if(peerMap.find(user_id) == peerMap.end()){
-        peerMap[user_id] = peer;
-        status = "user created";
-    }
-    else{
-        status ="userid exists";
-    }*/
+    std::cout<<"status :"<<status<<std::endl;
 
     if(send(new_fd,status.c_str(),status.size(),0) == -1){
         printf("sending success signal failed in create user \n");
@@ -194,12 +194,41 @@ int create_new_user(int new_fd){
     return 0;
 }
 
-void* serviceToPeer(void* i){
+std::string login(int new_fd){ // return user_id if success or nullstring
+    std::string user_id = getStringFromSocket(new_fd);
+    std::string passwd = getStringFromSocket(new_fd);
+    std::string retStrPeer = "";
+    std::string retStr="";
+    if(peerMap.find(user_id) == peerMap.end()){
+        retStrPeer = "User does not exists create one";
+    }
+    else if(peerMap[user_id]->password != passwd){
+        retStrPeer = "Wrong Password";
+    }
+    else{
+        retStrPeer = "login success";
+        peerMap[user_id]->loggedIn = true;
+        retStr = user_id;
+    }
+
+    if(send(new_fd,retStrPeer.c_str(),retStrPeer.size(),0) == -1){
+        printf("sending status signal failed in login \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    return retStr;
+} 
+
+void* serviceToPeer(void* i){ //this runs in a separate thread
     int new_fd = *((int *)i);
     free(i); // this way it ensures that each thread correcd fd is sent
+    std::string user_id = ""; // wanna save this here because want to know to which id this thread is assigned to
 
     while(1){
         std::string command = getStringFromSocket(new_fd);
+        std::cout<<"command is "<<command<<std::endl;
         if(command == "upload_file"){
             std::cout<<" peer wants to upload file "<<std::endl;
             acceptTorFileFromPeer(new_fd);
@@ -211,15 +240,27 @@ void* serviceToPeer(void* i){
         }
 
         else if(command == "login"){
-
+            if(user_id != ""){
+                std::cout<<"Already logged in as :"<<user_id;
+            }
+            else{
+                std::string status = login(new_fd);
+                if(status == "")
+                    std::cout<<"login failed"<<std::endl;
+                else{
+                    user_id = status;
+                    std::cout<<"Logged in as "<<user_id<<std::endl;
+                }
+            }
         }
-
         else if(command == "connectionClosedBySender"){
             std::cout<<"Connection closed by a peer"<<std::endl;
             break;
         }
         else{
             std::cout<<"Not a valid command"<<std::endl;
+            std::string ignore;
+            std::getline(std::cin,ignore);
         }
     }
     close(new_fd);
