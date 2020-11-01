@@ -147,9 +147,7 @@ int acceptTorFileFromPeer(int new_fd){
 }
 
 std::string updatePeerMap(Peer* peer,std::string user_id){
-    std::cout<<"update peer map called"<<std::endl;
     pthread_mutex_lock(&lockPeerMap);
-    std::cout<<"entered critical section "<<std::endl;
     std::string status;
     if(peerMap.find(user_id) == peerMap.end()){
         peerMap[user_id] = peer;
@@ -159,9 +157,15 @@ std::string updatePeerMap(Peer* peer,std::string user_id){
         status ="userid exists";
     }
     pthread_mutex_unlock(&lockPeerMap);
-    std::cout<<"out of critical section "<<std::endl;
     std::cout<<"Number of users :"<<peerMap.size()<<std::endl;
     return status;
+}
+
+int updatePeerMapLoginStatus(std::string user_id,bool b){
+    pthread_mutex_lock(&lockPeerMap);
+    peerMap[user_id]->loggedIn = b;
+    pthread_mutex_unlock(&lockPeerMap);
+    return 0;
 }
 
 int create_new_user(int new_fd){
@@ -194,6 +198,19 @@ int create_new_user(int new_fd){
     return 0;
 }
 
+int logout(int new_fd,std::string user_id){
+    updatePeerMapLoginStatus(user_id,false);
+    std::string retStrPeer = "Logged out ";
+    if(send(new_fd,retStrPeer.c_str(),retStrPeer.size(),0) == -1){
+        printf("sending status signal failed in login \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    return 0;
+}
+
 std::string login(int new_fd){ // return user_id if success or nullstring
     std::string user_id = getStringFromSocket(new_fd);
     std::string passwd = getStringFromSocket(new_fd);
@@ -207,7 +224,7 @@ std::string login(int new_fd){ // return user_id if success or nullstring
     }
     else{
         retStrPeer = "login success";
-        peerMap[user_id]->loggedIn = true;
+        updatePeerMapLoginStatus(user_id,true);
         retStr = user_id;
     }
 
@@ -253,6 +270,20 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
                 }
             }
         }
+
+        else if(command == "logout"){
+            if(user_id == ""){
+                std::cout<<"Didn't login to logout :"<<user_id;
+            }
+            else{
+                int status = logout(new_fd,user_id);
+                if(status == 0){
+                    std::cout<<"Logged out as"<<user_id<<std::endl;
+                    user_id = "";
+                }
+            }
+        }
+
         else if(command == "connectionClosedBySender"){
             std::cout<<"Connection closed by a peer"<<std::endl;
             break;

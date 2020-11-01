@@ -259,6 +259,19 @@ int upload_file(int sock_fd,std::string filePath,std::string peerAddr){
     return 0;
 }
 
+int logout(int sock_fd){
+    if (send(sock_fd,"logout",sizeof "login",0) == -1){
+        printf("sending command logout failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
+}
+
 int login(int sock_fd,std::string user_id,std::string passwd){
     if (send(sock_fd,"login",sizeof "login",0) == -1){
         printf("sending command login failed \n");
@@ -415,6 +428,10 @@ int main(int argc,char* argv[]){
             std::string user_id;std::cin>>user_id;
             std::string passwd; std::cin>>passwd;
             login(sock_fd,user_id,passwd);
+        }
+
+        else if(command =="logout"){
+            logout(sock_fd);
         }
 
         else if(command == "connect"){ // just for testing purposes
