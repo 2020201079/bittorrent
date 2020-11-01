@@ -223,6 +223,29 @@ int addGroupJoinReqToPeer(std::string owner,std::string user_id,std::string grou
     return 0;
 }
 
+int removeGroupJoinReq(std::string owner,std::string group_id,std::string user_id){
+    pthread_mutex_lock(&lockPeerMap);
+    auto& v = peerMap[owner]->groupJoinRequest;
+    auto position = std::find(v.begin(),v.end(),std::make_pair(group_id,user_id));
+    if(position != v.end()){
+        v.erase(position);
+    }
+    pthread_mutex_unlock(&lockPeerMap);
+    std::cout<<"removed join req "<<std::endl;
+    return 0;
+}
+
+int addMemberToGroup(std::string user_id,std::string group_id){
+    pthread_mutex_lock(&lockGroupMap);
+    auto group = groupMap[group_id];
+    group->members.push_back(user_id);
+    pthread_mutex_unlock(&lockGroupMap);
+    std::cout<<"Members in group :"<<group_id<<std::endl;
+    for(auto m:group->members) //printing for verifying
+        std::cout<<m<<std::endl;
+    return 0;
+}
+
 std::string create_group(int new_fd,std::string user_id,std::string group_id){
 
     Group* group = new Group();
@@ -247,6 +270,56 @@ std::string create_group(int new_fd,std::string user_id,std::string group_id){
 
     dummyRecv(new_fd);
     std::cout<<"end of create_group"<<std::endl;
+    return status;
+}
+
+std::string accept_request(int new_fd,std::string currUser,std::string group_id,std::string user_id){
+    std::string status="";
+    if(user_id==""){
+        status = "First login to list requests";
+    }
+    else{
+        if(groupMap.find(group_id) == groupMap.end()){
+            status = "Group does not exist with group_id :";
+            status.append(group_id);
+            removeGroupJoinReq(currUser,group_id,user_id);
+        }
+        else if(peerMap.find(user_id) == peerMap.end()){
+            status = "User does not exist with user_id :";
+            status.append(user_id);
+            removeGroupJoinReq(currUser,group_id,user_id);
+        }
+        else{
+            Group* group = groupMap[group_id];
+            if(group->ownwer != currUser){
+                status="Only owner of group can accept request: Permission denied";
+            }
+            else{
+                Group* group = groupMap[group_id];
+                auto x=std::find(group->members.begin(),group->members.end(),user_id);
+                if(x!=group->members.end()){ //user_id is already a member
+                    status = "User is already a member of group :";status.append(group_id);
+                    removeGroupJoinReq(currUser,group_id,user_id);
+                }
+                else{
+                    //send req to owner
+                    addMemberToGroup(user_id,group_id);
+                    status = user_id;
+                    status.append(" Added to group : ");status.append(group_id);
+                    removeGroupJoinReq(currUser,group_id,user_id);
+                }
+            }
+        }
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending status signal failed in create group \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    std::cout<<"end of accept request "<<std::endl;
     return status;
 }
 
@@ -355,15 +428,6 @@ int logout(int new_fd,std::string user_id){
     return 0;
 }
 
-/*std::string  join_group(std::string group_id,std::string user_id){
-    std::string status;
-    if(user_id == ""){
-        status = "Need to login first";
-    }
-    else if(){
-
-    }
-}*/
 std::string login(int new_fd,std::string user_id,std::string passwd,std::string& currUser){ // return user_id if success or nullstring
     std::string retStrPeer = "";
     if(peerMap.find(user_id) == peerMap.end()){
@@ -486,10 +550,18 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
             std::cout<<list_requests(new_fd,currUser,tokens[1])<<std::endl;
         }
 
+        else if(command == "accept_request"){
+            if(tokens.size() != 2 ){
+                std::cout<<"wrong format for accept requests "<<std::endl;
+            }
+            std::cout<<accept_request(new_fd,currUser,tokens[1],tokens[2])<<std::endl;
+        }
+
         else if(command == "connectionClosedBySender"){
             std::cout<<"Connection closed by a peer"<<std::endl;
             break;
         }
+
         else{
             std::cout<<"Not a valid command"<<std::endl;
             std::string ignore;
@@ -543,7 +615,6 @@ int main(int argc,char *argv[]){
         *fd = new_fd;
         pthread_t threadForServiceToPeer;
         pthread_create(&threadForServiceToPeer,NULL,serviceToPeer,fd);
-
     }
     close(new_fd);
 }

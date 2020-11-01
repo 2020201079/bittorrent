@@ -339,6 +339,22 @@ int create_user(int sock_fd,std::string user_id,std::string passwd){
     return 0;
 }
 
+int accept_request(int sock_fd,std::string group_id,std::string user_id){
+    std::string commandToSend = "accept_request";
+    commandToSend.append(delim).append(group_id).append(delim).append(user_id);
+
+    if(send(sock_fd,commandToSend.c_str(),commandToSend.size(),0) == -1){
+        printf("sending create_user command to client failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+    
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
+}
+
 int list_requests(int sock_fd,std::string group_id){
     std::string commandToSend = "list_requests";
     commandToSend.append(delim).append(group_id);
@@ -446,6 +462,11 @@ int main(int argc,char* argv[]){
             list_requests(sock_fd,group_id);
         }
 
+        else if(command == "accept_request"){
+            std::string group_id,user_id;std::cin>>group_id>>user_id;
+            accept_request(sock_fd,group_id,user_id);   
+        }
+
         else if(command == "connect"){ // just for testing purposes
             std::string IP,port;std::cin>>IP>>port;
             int sock_fd = makeConnectionToTracker(IP.c_str(),port.c_str());
@@ -456,6 +477,8 @@ int main(int argc,char* argv[]){
             }
             dummyRecv(sock_fd);
         }
+
+
 
         else{
             std::cout<<"Not a valid command "<<std::endl;
