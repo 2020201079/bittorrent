@@ -37,9 +37,35 @@ class Peer{
             }
 };
 
+class LocationInPeer{
+    public:
+        std::string user_id;
+        std::string filePathInPeer;
+};
+
+class FileMetaData{
+    public:
+        std::string fileName; 
+        std::string hash; // 
+        std::vector<LocationInPeer> clients;
+};
+
+class Group{
+    public:
+        std::string id;
+        std::string ownwer;
+        std::vector<std::string> members;
+        //filesName -> FileMetaData
+        std::unordered_map<std::string,FileMetaData*> filesShared; 
+};
+
 std::unordered_map<std::string,Peer*> peerMap;
 
+std::unordered_map<std::string,Group*> groupMap;
+
 pthread_mutex_t lockPeerMap;
+pthread_mutex_t lockGroupMap;
+
 
 int makeServer(std::string ip,std::string port){
     int sock_fd;
@@ -155,9 +181,26 @@ std::string updatePeerMap(Peer* peer,std::string user_id){
     }
     else{
         status ="userid exists";
+        free(peer);
     }
     pthread_mutex_unlock(&lockPeerMap);
     std::cout<<"Number of users :"<<peerMap.size()<<std::endl;
+    return status;
+}
+
+std::string updateGroupMap(Group* group,std::string group_id){
+    pthread_mutex_lock(&lockGroupMap);
+    std::string status;
+    if(groupMap.find(group_id) == groupMap.end()){
+        groupMap[group_id] = group;
+        status = "group created";
+    }
+    else{
+        status ="group exists";
+        free(group);
+    }
+    pthread_mutex_unlock(&lockGroupMap);
+    std::cout<<"Number of groups :"<<groupMap.size()<<std::endl;
     return status;
 }
 
@@ -168,6 +211,35 @@ int updatePeerMapLoginStatus(std::string user_id,bool b){
     return 0;
 }
 
+int create_group(int new_fd,std::string user_id){
+    std::string group_id = getStringFromSocket(new_fd);
+    std::cout<<"group id :"<<group_id<<std::endl;
+
+    Group* group = new Group();
+    group->id = group_id;
+    group->ownwer = user_id;
+    group->members.push_back(user_id);
+
+    std::string status;
+    if(user_id==""){
+        status = "First login to create group";
+        free(group);
+    }
+    else{
+        status = updateGroupMap(group,group_id);
+        std::cout<<"status :"<<status<<std::endl;
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending success signal failed in create group \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    std::cout<<"end of create_group"<<std::endl;
+    return 0;
+}
 int create_new_user(int new_fd){
 
     std::string user_id = getStringFromSocket(new_fd);
@@ -252,7 +324,6 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
         }
         else if(command == "create_user"){
             std::cout<<"create user called "<<std::endl;
-            //create_user(new_fd);
             create_new_user(new_fd);
         }
 
@@ -278,10 +349,15 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
             else{
                 int status = logout(new_fd,user_id);
                 if(status == 0){
-                    std::cout<<"Logged out as"<<user_id<<std::endl;
+                    std::cout<<"Logged out as : "<<user_id<<std::endl;
                     user_id = "";
                 }
             }
+        }
+
+        else if(command == "create_group"){
+            std::cout<<"create group called "<<std::endl;
+            create_group(new_fd,user_id);
         }
 
         else if(command == "connectionClosedBySender"){
