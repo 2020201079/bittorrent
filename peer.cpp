@@ -19,6 +19,7 @@ int blockSize = 512*1024;
 int hashOutputSize = 20;
 std::string portNoToShareFiles;
 std::string IPTolisten;
+std::string delim = ">>=";
 
 int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
     std::cout<<"port of tracker is "<<std::string(portOfTracker)<<std::endl;
@@ -273,7 +274,10 @@ int logout(int sock_fd){
 }
 
 int login(int sock_fd,std::string user_id,std::string passwd){
-    if (send(sock_fd,"login",sizeof "login",0) == -1){
+    std::string commandToSend = "login";
+    commandToSend.append(delim).append(user_id).append(delim).append(passwd);
+    
+    if (send(sock_fd,commandToSend.c_str(),commandToSend.length(),0) == -1){
         printf("sending command login failed \n");
         close(sock_fd);
         exit(1);
@@ -281,16 +285,17 @@ int login(int sock_fd,std::string user_id,std::string passwd){
 
     dummyRecv(sock_fd);
 
-    if(send(sock_fd,user_id.c_str(),user_id.size(),0) == -1){
-        printf("sendind user_id failed for login \n");
-        close(sock_fd);
-        exit(1);
-    }
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
+}
 
-    dummyRecv(sock_fd);
-
-    if (send(sock_fd,passwd.c_str(),passwd.size(),0) == -1){
-        printf("sendind passwd failed for login \n");
+int join_group(int sock_fd,std::string group_id){
+    std::string command = "join_group";
+    command.append(delim).append(group_id);
+    
+    if (send(sock_fd,command.c_str(),command.size(),0) == -1){
+        printf("sending command join group failed \n");
         close(sock_fd);
         exit(1);
     }
@@ -300,7 +305,6 @@ int login(int sock_fd,std::string user_id,std::string passwd){
     std::cout<<status<<std::endl;
     return 0;
 }
-
 int create_group(int sock_fd,std::string group_id){
     
     if (send(sock_fd,"create_group",sizeof "create_group",0) == -1){
@@ -321,56 +325,21 @@ int create_group(int sock_fd,std::string group_id){
     std::cout<<status<<std::endl;
     return 0;
 }
+
 int create_user(int sock_fd,std::string user_id,std::string passwd){
+    std::string commandToSend = "create_user";
+    commandToSend.append(delim).append(user_id).append(delim).append(passwd).append(delim)\
+    .append(IPTolisten).append(delim).append(portNoToShareFiles);
 
-    //int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
-    std::cout<<"sock_fd : "<<sock_fd<<std::endl;
-    
-    if (send(sock_fd,"create_user",sizeof "create_user",0) == -1){
-        printf("sending command create_user failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-
-    dummyRecv(sock_fd);
-
-    if(send(sock_fd,user_id.c_str(),user_id.size(),0) == -1){
-        printf("sendind user_id failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-
-    dummyRecv(sock_fd);
-
-    if (send(sock_fd,passwd.c_str(),passwd.size(),0) == -1){
-        printf("sendind passwd failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-    dummyRecv(sock_fd);
-
-    if(send(sock_fd,IPTolisten.c_str(),IPTolisten.size(),0) == -1){
-        printf("sending ip of client failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-    dummyRecv(sock_fd);
-
-    if(send(sock_fd,portNoToShareFiles.c_str(),portNoToShareFiles.size(),0) == -1){
-        printf("sending port of client failed \n");
+    if(send(sock_fd,commandToSend.c_str(),commandToSend.size(),0) == -1){
+        printf("sending create_user command to client failed \n");
         close(sock_fd);
         exit(1);
     }
     dummyRecv(sock_fd);
 
     std::string status = getStringFromSocket(sock_fd);
-
-    if(status == "user created"){
-        std::cout<<"User created"<<std::endl;
-    }
-    else{
-        std::cout<<"User already exists"<<std::endl;
-    }
+    std::cout<<status<<std::endl;
     return 0;
 }
 
@@ -445,7 +414,10 @@ int main(int argc,char* argv[]){
             std::string group_id;std::cin>>group_id;
             create_group(sock_fd,group_id);
         }
-
+        else if(command =="join_group"){
+            std::string group_id;std::cin>>group_id;
+            join_group(sock_fd,group_id);    
+        }
         else if(command == "login"){
             std::string user_id;std::cin>>user_id;
             std::string passwd; std::cin>>passwd;
@@ -455,6 +427,8 @@ int main(int argc,char* argv[]){
         else if(command =="logout"){
             logout(sock_fd);
         }
+
+
 
         else if(command == "connect"){ // just for testing purposes
             std::string IP,port;std::cin>>IP>>port;

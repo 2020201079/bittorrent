@@ -66,6 +66,8 @@ std::unordered_map<std::string,Group*> groupMap;
 pthread_mutex_t lockPeerMap;
 pthread_mutex_t lockGroupMap;
 
+std::string delim = ">>=";
+
 
 int makeServer(std::string ip,std::string port){
     int sock_fd;
@@ -240,22 +242,10 @@ int create_group(int new_fd,std::string user_id){
     std::cout<<"end of create_group"<<std::endl;
     return 0;
 }
-int create_new_user(int new_fd){
 
-    std::string user_id = getStringFromSocket(new_fd);
-    std::cout<<"user id :"<<user_id<<std::endl;
+int create_user(int new_fd,std::string user_id,std::string passwd,std::string IP,std::string port){
+    Peer* peer = new Peer(user_id,passwd,IP,port);
 
-    std::string passwd = getStringFromSocket(new_fd);
-    std::cout<<"passwd :"<<passwd<<std::endl;
-
-    std::string ip = getStringFromSocket(new_fd);
-    std::cout<<"ip :"<<ip<<std::endl;
-
-    std::string port = getStringFromSocket(new_fd);
-    std::cout<<"port :"<<port<<std::endl;
-
-    Peer* peer = new Peer(user_id,passwd,ip,port); 
-    
     std::string status = updatePeerMap(peer,user_id);
     std::cout<<"status :"<<status<<std::endl;
 
@@ -283,11 +273,17 @@ int logout(int new_fd,std::string user_id){
     return 0;
 }
 
-std::string login(int new_fd){ // return user_id if success or nullstring
-    std::string user_id = getStringFromSocket(new_fd);
-    std::string passwd = getStringFromSocket(new_fd);
+/*std::string  join_group(std::string group_id,std::string user_id){
+    std::string status;
+    if(user_id == ""){
+        status = "Need to login first";
+    }
+    else if(){
+
+    }
+}*/
+std::string login(int new_fd,std::string user_id,std::string passwd,std::string& currUser){ // return user_id if success or nullstring
     std::string retStrPeer = "";
-    std::string retStr="";
     if(peerMap.find(user_id) == peerMap.end()){
         retStrPeer = "User does not exists create one";
     }
@@ -297,7 +293,7 @@ std::string login(int new_fd){ // return user_id if success or nullstring
     else{
         retStrPeer = "login success";
         updatePeerMapLoginStatus(user_id,true);
-        retStr = user_id;
+        currUser = user_id;
     }
 
     if(send(new_fd,retStrPeer.c_str(),retStrPeer.size(),0) == -1){
@@ -307,57 +303,91 @@ std::string login(int new_fd){ // return user_id if success or nullstring
     }
 
     dummyRecv(new_fd);
-    return retStr;
+    return retStrPeer;
 } 
+
+std::vector<std::string> getTokens(std::string input){
+    std::vector<std::string> result;
+    
+    size_t pos = 0;
+    std::string token;
+    while((pos = input.find(delim))!=std::string::npos){
+        token = input.substr(0,pos);
+        result.push_back(token);
+        input.erase(0,pos+delim.length());
+    }
+    result.push_back(input);
+    return result;
+}
 
 void* serviceToPeer(void* i){ //this runs in a separate thread
     int new_fd = *((int *)i);
     free(i); // this way it ensures that each thread correcd fd is sent
-    std::string user_id = ""; // wanna save this here because want to know to which id this thread is assigned to
+    std::string currUser = ""; // wanna save this here because want to know to which id this thread is assigned to
 
     while(1){
-        std::string command = getStringFromSocket(new_fd);
+        std::string stringFromPeer = getStringFromSocket(new_fd);
+        std::vector<std::string> tokens = getTokens(stringFromPeer);
+        std::string command = tokens[0];
         std::cout<<"command is "<<command<<std::endl;
+        
         if(command == "upload_file"){
             std::cout<<" peer wants to upload file "<<std::endl;
             acceptTorFileFromPeer(new_fd);
         }
         else if(command == "create_user"){
-            std::cout<<"create user called "<<std::endl;
-            create_new_user(new_fd);
+            if(tokens.size() != 5){
+                std::cout<<"wrong format for create user "<<std::endl;
+            }
+            else{
+                std::cout<<"create user called "<<std::endl;
+                create_user(new_fd,tokens[1],tokens[2],tokens[3],tokens[4]);
+            }
         }
 
         else if(command == "login"){
-            if(user_id != ""){
-                std::cout<<"Already logged in as :"<<user_id;
+            if(tokens.size() != 3){
+                std::cout<<"wrong format for login "<<std::endl;
             }
             else{
-                std::string status = login(new_fd);
-                if(status == "")
-                    std::cout<<"login failed"<<std::endl;
+                if(currUser != ""){
+                    std::cout<<"Already logged in as :"<<currUser;
+                }
                 else{
-                    user_id = status;
-                    std::cout<<"Logged in as "<<user_id<<std::endl;
+                    std::string status = login(new_fd,tokens[1],tokens[2],currUser);
+                    std::cout<<status<<std::endl;
                 }
             }
         }
 
         else if(command == "logout"){
-            if(user_id == ""){
-                std::cout<<"Didn't login to logout :"<<user_id;
+            if(tokens.size() != 1){
+                std::cout<<"wrong format for logout "<<std::endl;
             }
             else{
-                int status = logout(new_fd,user_id);
+            if(currUser == "")
+                std::cout<<"Didn't login to logout :"<<currUser;
+            else{
+                int status = logout(new_fd,currUser);
                 if(status == 0){
-                    std::cout<<"Logged out as : "<<user_id<<std::endl;
-                    user_id = "";
+                    std::cout<<"Logged out as : "<<currUser<<std::endl;
+                    currUser = "";
+                    }
                 }
             }
         }
 
         else if(command == "create_group"){
             std::cout<<"create group called "<<std::endl;
-            create_group(new_fd,user_id);
+            create_group(new_fd,currUser);
+        }
+
+        else if(command == "join_group"){
+            if(tokens.size() != 2 ){
+                std::cout<<"wrong format for join group "<<std::endl;
+            }
+            //join_group(tokens[1],user_id);// send token 1 here
+            //lets implement later
         }
 
         else if(command == "connectionClosedBySender"){
