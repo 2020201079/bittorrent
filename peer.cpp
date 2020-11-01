@@ -276,7 +276,7 @@ int logout(int sock_fd){
 int login(int sock_fd,std::string user_id,std::string passwd){
     std::string commandToSend = "login";
     commandToSend.append(delim).append(user_id).append(delim).append(passwd);
-    
+
     if (send(sock_fd,commandToSend.c_str(),commandToSend.length(),0) == -1){
         printf("sending command login failed \n");
         close(sock_fd);
@@ -305,17 +305,13 @@ int join_group(int sock_fd,std::string group_id){
     std::cout<<status<<std::endl;
     return 0;
 }
-int create_group(int sock_fd,std::string group_id){
-    
-    if (send(sock_fd,"create_group",sizeof "create_group",0) == -1){
-        printf("sending command create_group failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-    dummyRecv(sock_fd);
 
-    if(send(sock_fd,group_id.c_str(),group_id.size(),0) == -1){
-        printf("sendind group_id failed \n");
+int create_group(int sock_fd,std::string group_id){
+    std::string commandToSend = "create_group";
+    commandToSend.append(delim).append(group_id);
+    
+    if (send(sock_fd,commandToSend.c_str(),commandToSend.length(),0) == -1){
+        printf("sending command create_group failed \n");
         close(sock_fd);
         exit(1);
     }
@@ -341,6 +337,23 @@ int create_user(int sock_fd,std::string user_id,std::string passwd){
     std::string status = getStringFromSocket(sock_fd);
     std::cout<<status<<std::endl;
     return 0;
+}
+
+int list_requests(int sock_fd,std::string group_id){
+    std::string commandToSend = "list_requests";
+    commandToSend.append(delim).append(group_id);
+
+    if(send(sock_fd,commandToSend.c_str(),commandToSend.size(),0) == -1){
+        printf("sending create_user command to client failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
+
 }
 
 void* fileSharer(void* argv){
@@ -428,7 +441,10 @@ int main(int argc,char* argv[]){
             logout(sock_fd);
         }
 
-
+        else if(command =="list_requests"){
+            std::string group_id;std::cin>>group_id;
+            list_requests(sock_fd,group_id);
+        }
 
         else if(command == "connect"){ // just for testing purposes
             std::string IP,port;std::cin>>IP>>port;

@@ -13,6 +13,7 @@
 #include<fstream>
 #include<fcntl.h>
 #include<unordered_map>
+#include<algorithm>
 
 #define MAXDATASIZE 100 // max number of bytes we can get at once
 
@@ -35,6 +36,7 @@ class Peer{
                 this->IP = ip;
                 this->port = port;
             }
+            std::vector<std::pair<std::string,std::string>> groupJoinRequest; //(group_id,user_id) this user is owner
 };
 
 class LocationInPeer{
@@ -213,9 +215,15 @@ int updatePeerMapLoginStatus(std::string user_id,bool b){
     return 0;
 }
 
-int create_group(int new_fd,std::string user_id){
-    std::string group_id = getStringFromSocket(new_fd);
-    std::cout<<"group id :"<<group_id<<std::endl;
+int addGroupJoinReqToPeer(std::string owner,std::string user_id,std::string group_id){
+    pthread_mutex_lock(&lockPeerMap);
+    peerMap[owner]->groupJoinRequest.push_back({group_id,user_id});
+    pthread_mutex_unlock(&lockPeerMap);
+    std::cout<<"Added group join req to "<<owner<<" to allow "<<user_id<<" to join group "<<group_id<<std::endl;
+    return 0;
+}
+
+std::string create_group(int new_fd,std::string user_id,std::string group_id){
 
     Group* group = new Group();
     group->id = group_id;
@@ -229,18 +237,92 @@ int create_group(int new_fd,std::string user_id){
     }
     else{
         status = updateGroupMap(group,group_id);
-        std::cout<<"status :"<<status<<std::endl;
     }
 
     if(send(new_fd,status.c_str(),status.size(),0) == -1){
-        printf("sending success signal failed in create group \n");
+        printf("sending status signal failed in create group \n");
         close(new_fd);
         exit(1);
     }
 
     dummyRecv(new_fd);
     std::cout<<"end of create_group"<<std::endl;
-    return 0;
+    return status;
+}
+
+std::string list_requests(int new_fd,std::string user_id,std::string group_id){
+    std::string status="";
+    if(user_id==""){
+        status = "First login to list requests";
+    }
+    else{
+        if(groupMap.find(group_id) == groupMap.end()){
+            status = "Group does not exist with group_id :";
+            status.append(group_id);
+        }
+        else{
+            Group* group = groupMap[group_id];
+            if(group->ownwer != user_id){
+                status="Only owner can list request: Permission denied";
+            }
+            else{
+                if(peerMap[user_id]->groupJoinRequest.size() == 0){
+                    status="No pending request";
+                }
+                else{
+                    status.append("Group").append("    ").append("User ID").append("\n");
+                    for(auto r:peerMap[user_id]->groupJoinRequest){
+                        status.append(r.first).append("    ").append(r.second).append("\n");
+                    }
+                }
+            }
+        }
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending status signal failed in list request \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    std::cout<<"end of list request"<<std::endl;
+    return status;
+}
+
+std::string join_group(int new_fd,std::string user_id,std::string group_id){
+    std::string status;
+    if(user_id==""){
+        status = "First login to create group";
+    }
+    else{
+        if(groupMap.find(group_id) == groupMap.end()){
+            status = "Group does not exist with group_id :";
+            status.append(group_id);
+        }
+        else{
+            Group* group = groupMap[group_id];
+            auto x=std::find(group->members.begin(),group->members.end(),user_id);
+            if(x!=group->members.end()){ //user_id is already a member
+                status = "User is already a member of group :";status.append(group_id);
+            }
+            else{
+                //send req to owner
+                addGroupJoinReqToPeer(group->ownwer,user_id,group_id);
+                status = "Requested group owner to join group : ";status.append(group_id);
+            }
+        }
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending status in join group \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    std::cout<<"end of join_group"<<std::endl;
+    return status;
 }
 
 int create_user(int new_fd,std::string user_id,std::string passwd,std::string IP,std::string port){
@@ -378,16 +460,30 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
         }
 
         else if(command == "create_group"){
-            std::cout<<"create group called "<<std::endl;
-            create_group(new_fd,currUser);
+            std::string status;
+            if(tokens.size() != 2){
+                std::cout<<"wrong format for create_group "<<std::endl;
+            }
+            else{
+                
+                std::cout<<"create group called "<<std::endl;
+                status = create_group(new_fd,currUser,tokens[1]);
+            }
+            std::cout<<status<<std::endl;
         }
 
         else if(command == "join_group"){
             if(tokens.size() != 2 ){
                 std::cout<<"wrong format for join group "<<std::endl;
             }
-            //join_group(tokens[1],user_id);// send token 1 here
-            //lets implement later
+            std::cout<<join_group(new_fd,currUser,tokens[1])<<std::endl;
+        }
+
+        else if(command == "list_requests"){
+            if(tokens.size() != 2 ){
+                std::cout<<"wrong format for lists requests "<<std::endl;
+            }
+            std::cout<<list_requests(new_fd,currUser,tokens[1])<<std::endl;
         }
 
         else if(command == "connectionClosedBySender"){
