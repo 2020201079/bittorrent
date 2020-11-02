@@ -21,6 +21,18 @@ std::string portNoToShareFiles;
 std::string IPTolisten;
 std::string delim = ">>=";
 
+class PeerInfo{
+    public:
+        std::string user_id;
+        std::string destinationPath;
+        std::string address; // ip::port --> format
+        PeerInfo(std::string user_id,std::string address,std::string filePath){
+            this->user_id = user_id;
+            this->destinationPath = filePath;
+            this->address = address;
+        }
+};
+
 int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
     std::cout<<"port of tracker is "<<std::string(portOfTracker)<<std::endl;
     int sock_fd,new_fd;
@@ -188,77 +200,6 @@ std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
 
     return hashBlocks;
 }
-/*
-int upload_file(int sock_fd,std::string filePath,std::string peerAddr){
-    std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
-    std::vector<std::pair<int,std::string>> hashBlocks = getHashOfFile(filePath);
-    int noOfBlocks = hashBlocks.size();
-
-    //int sock_fd = makeConnectionToTracker(trackerIP,portOfTracker);
-    //send command
-    if (send(sock_fd,"upload_file",sizeof "upload_file",0) == -1){
-        printf("sendind command upload_file failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-
-    dummyRecv(sock_fd);
-
-    //send peerAddress
-    if (send(sock_fd,peerAddr.c_str(),peerAddr.size(),0) == -1){
-        printf("sendind peer addr failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-
-    dummyRecv(sock_fd);
-
-    //send fileName
-    if (send(sock_fd,fileName.c_str(),fileName.size(),0) == -1){
-        printf("sendind file name failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-
-    dummyRecv(sock_fd);
-
-    // send filePath
-    if (send(sock_fd,filePath.c_str(),filePath.size(),0) == -1){
-        printf("sendind file path failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-
-    dummyRecv(sock_fd);
-
-    //send number of blocks
-    if (send(sock_fd,std::to_string(noOfBlocks).c_str(),std::to_string(noOfBlocks).size(),0) == -1){
-        printf("sending number of blocks failed \n");
-        close(sock_fd);
-        exit(1);
-    }
-
-    dummyRecv(sock_fd);
-
-    for(auto p : hashBlocks){
-        if (send(sock_fd,std::to_string(p.first).c_str(),std::to_string(p.first).size(),0) == -1){
-            printf("sending the block size failed \n");
-            close(sock_fd);
-            exit(1);
-        }
-        dummyRecv(sock_fd);
-        if (send(sock_fd,p.second.c_str(),p.second.size(),0) == -1){
-            printf("sending a hash block failed \n");
-            close(sock_fd);
-            exit(1);
-        }
-        dummyRecv(sock_fd);
-    }
-
-    //close(sock_fd);
-    std::cout<<"file shared"<<std::endl;
-    return 0;
-}*/
 
 int upload_file(int sock_fd,std::string filePath,std::string group_id){
     std::string commandToSend = "upload_file";
@@ -396,6 +337,59 @@ int create_user(int sock_fd,std::string user_id,std::string passwd){
     return 0;
 }
 
+std::vector<PeerInfo> getPeersWithFile(int sock_fd,std::string group_id,std::string fileName){ //need to run this in a thread
+    std::string commandToSend = "getPeersWithFile";
+    commandToSend.append(delim).append(group_id).append(delim).append(fileName);
+
+    std::cout<<"command send:"<<commandToSend<<std::endl;
+
+    if(send(sock_fd,commandToSend.c_str(),commandToSend.size(),0) == -1){
+        printf("sending get peer with file command to tracker failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    int noOfPeers = std::stoi(getStringFromSocket(sock_fd));
+    std::cout<<"Number of peers with "<< fileName <<" is "<<noOfPeers<<std::endl;
+    std::vector<PeerInfo> peerList;
+    for(int i=0;i<noOfPeers;i++){
+        std::string user_id = getStringFromSocket(sock_fd);
+        std::string address = getStringFromSocket(sock_fd);
+        std::string filePath = getStringFromSocket(sock_fd);
+        peerList.push_back(PeerInfo(user_id,address,filePath));
+    }
+
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return peerList;
+}
+int list_files(int sock_fd,std::string group_id){
+    std::string commandToSend = "list_files";
+    commandToSend.append(delim).append(group_id);
+
+    if(send(sock_fd,commandToSend.c_str(),commandToSend.size(),0) == -1){
+        printf("sending create_user command to client failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    int noOfFiles = std::stoi(getStringFromSocket(sock_fd));
+    std::vector<std::string> fileNames;
+    std::cout<<"Number of files in group is "<<noOfFiles<<std::endl;
+    for(int i=0;i<noOfFiles;i++){
+        fileNames.push_back(getStringFromSocket(sock_fd));
+    }
+    for(auto fn : fileNames){
+        std::cout<<fn<<std::endl;
+    }
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
+
+}
+
 int accept_request(int sock_fd,std::string group_id,std::string user_id){
     std::string commandToSend = "accept_request";
     commandToSend.append(delim).append(group_id).append(delim).append(user_id);
@@ -479,6 +473,7 @@ int main(int argc,char* argv[]){
     int sock_fd = makeConnectionToTracker(tracker1IP.c_str(),tracker1Port.c_str());
     while(1){
         std::string command;std::cin>>command;
+        std::cout<<"Command is "<<command<<std::endl;
         if(command == "upload_file"){
             std::string filePath;
             std::cin>>filePath;
@@ -489,10 +484,6 @@ int main(int argc,char* argv[]){
             }
             else
                 upload_file(sock_fd,filePath,group_id);
-        }
-
-        else if(command == "download_file"){
-            std::cout<<"called download file"<<std::endl;
         }
 
         else if(command == "create_user"){
@@ -533,6 +524,11 @@ int main(int argc,char* argv[]){
             list_groups(sock_fd);
         }
 
+        else if(command == "list_files"){
+            std::string group_id;std::cin>>group_id;
+            list_files(sock_fd,group_id);
+        }
+
         else if(command == "connect"){ // just for testing purposes
             std::string IP,port;std::cin>>IP>>port;
             int sock_fd = makeConnectionToTracker(IP.c_str(),port.c_str());
@@ -542,6 +538,14 @@ int main(int argc,char* argv[]){
                 exit(1);
             }
             dummyRecv(sock_fd);
+        }
+
+        else if(command == "download_file"){
+            std::string group_id,file_name,destinationPath;std::cin>>group_id>>file_name>>destinationPath;
+            std::vector<PeerInfo> peerList = getPeersWithFile(sock_fd,group_id,file_name);
+            for(auto p:peerList)
+                std::cout<<p.user_id<<std::endl;
+            // should download file from each peer later
         }
 
         else{

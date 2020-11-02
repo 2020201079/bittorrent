@@ -515,6 +515,142 @@ std::string list_requests(int new_fd,std::string user_id,std::string group_id){
     return status;
 }
 
+void getPeersWithFile_exitHelper(int new_fd){
+    std::string peerListSizeStr = "0";
+    if(send(new_fd,peerListSizeStr.c_str(),peerListSizeStr.size(),0) == -1){
+        printf("sending no of peers in get peers with file failed \n");
+        close(new_fd);
+        exit(1);
+    }
+    dummyRecv(new_fd);
+}
+
+std::string getPeersWithFile(int new_fd,std::string group_id,std::string fileName,std::string currUser){
+    std::string status;
+    std::string noOfFilesStr = "0";
+    if(currUser==""){
+        status = "First login to list requests";
+        getPeersWithFile_exitHelper(new_fd);
+    }
+    else if (groupMap.find(group_id) == groupMap.end()){
+            status = "Group does not exists ";
+            getPeersWithFile_exitHelper(new_fd);
+        }
+    else{
+        auto group = groupMap[group_id];
+        auto x=std::find(group->members.begin(),group->members.end(),currUser);
+        if(x==group->members.end()){
+            status = "User does not belong to group ";status.append(group_id);
+            getPeersWithFile_exitHelper(new_fd);
+        }
+        else{
+            if(group->filesShared.find(fileName) == group->filesShared.end()){
+                status = fileName;
+                status.append(" is not shared in the group ").append(group_id);
+                getPeersWithFile_exitHelper(new_fd);
+            }
+            else{
+                std::string peerListSizeStr = std::to_string(group->filesShared[fileName]->clientsHavingThisFile.size());
+                status = "sending no of peers :";status.append(peerListSizeStr);
+                if(send(new_fd,peerListSizeStr.c_str(),peerListSizeStr.size(),0) == -1){
+                    printf("sending no of peers in get peers with file failed \n");
+                    close(new_fd);
+                    exit(1);
+                }
+                dummyRecv(new_fd);
+
+                for(auto peer: group->filesShared[fileName]->clientsHavingThisFile){
+                    std::cout<<"Sending user id "<<peer.user_id<<std::endl;
+
+                    if(send(new_fd,peer.user_id.c_str(),peer.user_id.size(),0) == -1){
+                        printf("sending user id in get peers with files failed \n");
+                        close(new_fd);
+                        exit(1);
+                    }
+                    dummyRecv(new_fd);
+
+                    std::string address = peerMap[peer.user_id]->IP;
+                    address.append(":").append(peerMap[peer.user_id]->port);
+                    std::cout<<"Sending address in peer "<<address<<std::endl;
+
+                    if(send(new_fd,address.c_str(),address.size(),0) == -1){
+                        printf("sending address in get peers with file failed \n");
+                        close(new_fd);
+                        exit(1);
+                    }
+                    dummyRecv(new_fd);
+
+                    std::cout<<"Sending file path "<<peer.filePathInPeer<<std::endl;
+
+                    if(send(new_fd,peer.filePathInPeer.c_str(),peer.filePathInPeer.size(),0) == -1){
+                        printf("sending file path in get peers with files failed \n");
+                        close(new_fd);
+                        exit(1);
+                    }
+                    dummyRecv(new_fd);
+                }
+            }
+        }
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending status in get peers with files  \n");
+        close(new_fd);
+        exit(1);
+    }
+    dummyRecv(new_fd);    
+    
+    std::cout<<"end of get peers with files"<<std::endl;
+    return status;
+}
+std::string list_files(int new_fd,std::string group_id){
+    std::string status;
+    std::string noOfFilesStr = "0";
+    if(groupMap.find(group_id) == groupMap.end()){
+        status = "Group does not exist with group_id :";
+        status.append(group_id);
+
+        if(send(new_fd,noOfFilesStr.c_str(),noOfFilesStr.size(),0) == -1){
+            printf("sending no of files in list files failed \n");
+            close(new_fd);
+            exit(1);
+        }
+        dummyRecv(new_fd);
+    }
+    else{
+        auto group = groupMap[group_id];
+        int noOfFiles = group->filesShared.size();
+        noOfFilesStr = std::to_string(noOfFiles);
+        std::cout<<"Sending no of files :"<<noOfFilesStr<<std::endl;
+        status = "No of files sent is :";status.append(noOfFilesStr);
+        if(send(new_fd,noOfFilesStr.c_str(),noOfFilesStr.size(),0) == -1){
+            printf("sending no of files in list files failed \n");
+            close(new_fd);
+            exit(1);
+        }
+        dummyRecv(new_fd);
+
+        for(auto f : group->filesShared){
+            std::cout<<"Sending file name :"<<f.first<<std::endl;
+            if(send(new_fd,f.first.c_str(),f.first.size(),0) == -1){
+                printf("sending file names in list files failed \n");
+                close(new_fd);
+                exit(1);
+            }
+            dummyRecv(new_fd);
+        }
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending status in list group \n");
+        close(new_fd);
+        exit(1);
+    }
+    dummyRecv(new_fd);
+
+    std::cout<<"end of list files"<<std::endl;
+    return status;
+}
 std::string list_groups(int new_fd){
     std::string status;
     if(groupMap.size() == 0){
@@ -716,6 +852,20 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
                 std::cout<<"wrong format for list group "<<std::endl;
             }
             std::cout<<list_groups(new_fd)<<std::endl;
+        }
+
+        else if(command == "list_files"){
+            if(tokens.size() != 2 ){
+                std::cout<<"wrong format for list files "<<std::endl;
+            }
+            std::cout<<list_files(new_fd,tokens[1])<<std::endl;
+        }
+
+        else if(command == "getPeersWithFile"){
+            if(tokens.size() != 3 ){
+                std::cout<<"wrong format for getPeersWithFils "<<std::endl;
+            }
+            std::cout<<getPeersWithFile(new_fd,tokens[1],tokens[2],currUser)<<std::endl;
         }
 
         else if(command == "list_requests"){
