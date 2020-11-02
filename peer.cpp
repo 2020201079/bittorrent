@@ -188,7 +188,7 @@ std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
 
     return hashBlocks;
 }
-
+/*
 int upload_file(int sock_fd,std::string filePath,std::string peerAddr){
     std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
     std::vector<std::pair<int,std::string>> hashBlocks = getHashOfFile(filePath);
@@ -258,6 +258,48 @@ int upload_file(int sock_fd,std::string filePath,std::string peerAddr){
     //close(sock_fd);
     std::cout<<"file shared"<<std::endl;
     return 0;
+}*/
+
+int upload_file(int sock_fd,std::string filePath,std::string group_id){
+    std::string commandToSend = "upload_file";
+    commandToSend.append(delim).append(filePath).append(delim).append(group_id);
+
+    if (send(sock_fd,commandToSend.c_str(),commandToSend.length(),0) == -1){
+        printf("sending command login failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+
+    dummyRecv(sock_fd);
+
+    //now have to send size+hashBlocks
+    std::vector<std::pair<int,std::string>> hashBlocks = getHashOfFile(filePath); //uncessarily added int 
+    int noOfBlocks = hashBlocks.size();
+    int sizeOfFile = 0;
+    for(auto p:hashBlocks)
+        sizeOfFile += p.first;
+    
+    std::string sizePlusNoOfBlocks = std::to_string(sizeOfFile).append(delim).append(std::to_string(noOfBlocks));
+    if (send(sock_fd,sizePlusNoOfBlocks.c_str(),sizePlusNoOfBlocks.length(),0) == -1){
+        printf("sending size + hash failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+    
+    for(auto h: hashBlocks){
+        if (send(sock_fd,h.second.c_str(),h.second.length(),0) == -1){
+        printf("sending size + hash failed \n");
+        close(sock_fd);
+        exit(1);
+        }
+        dummyRecv(sock_fd);
+        std::cout<<h.second<<std::endl;
+    }
+
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
 }
 
 int logout(int sock_fd){
@@ -322,6 +364,21 @@ int create_group(int sock_fd,std::string group_id){
     return 0;
 }
 
+int list_groups(int sock_fd){
+    std::string commandToSend = "list_groups";
+
+    if (send(sock_fd,commandToSend.c_str(),commandToSend.length(),0) == -1){
+        printf("sending command create_group failed \n");
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+
+    std::string status = getStringFromSocket(sock_fd);
+    std::cout<<status<<std::endl;
+    return 0;
+}
+
 int create_user(int sock_fd,std::string user_id,std::string passwd){
     std::string commandToSend = "create_user";
     commandToSend.append(delim).append(user_id).append(delim).append(passwd).append(delim)\
@@ -349,7 +406,7 @@ int accept_request(int sock_fd,std::string group_id,std::string user_id){
         exit(1);
     }
     dummyRecv(sock_fd);
-    
+
     std::string status = getStringFromSocket(sock_fd);
     std::cout<<status<<std::endl;
     return 0;
@@ -425,8 +482,13 @@ int main(int argc,char* argv[]){
         if(command == "upload_file"){
             std::string filePath;
             std::cin>>filePath;
-            int groupid;std::cin>>groupid;
-            upload_file(sock_fd,filePath,peerAddr);
+            std::string group_id;std::cin>>group_id;
+            int fd = open(filePath.c_str(),O_RDONLY);
+            if(fd==-1){
+                perror("Error openning file ");
+            }
+            else
+                upload_file(sock_fd,filePath,group_id);
         }
 
         else if(command == "download_file"){
@@ -467,6 +529,10 @@ int main(int argc,char* argv[]){
             accept_request(sock_fd,group_id,user_id);   
         }
 
+        else if(command == "list_groups"){
+            list_groups(sock_fd);
+        }
+
         else if(command == "connect"){ // just for testing purposes
             std::string IP,port;std::cin>>IP>>port;
             int sock_fd = makeConnectionToTracker(IP.c_str(),port.c_str());
@@ -477,8 +543,6 @@ int main(int argc,char* argv[]){
             }
             dummyRecv(sock_fd);
         }
-
-
 
         else{
             std::cout<<"Not a valid command "<<std::endl;

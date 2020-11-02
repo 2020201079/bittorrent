@@ -39,7 +39,7 @@ class Peer{
             std::vector<std::pair<std::string,std::string>> groupJoinRequest; //(group_id,user_id) this user is owner
 };
 
-class LocationInPeer{
+class PeerInfo{ // this object is in FileMetaData
     public:
         std::string user_id;
         std::string filePathInPeer;
@@ -47,18 +47,40 @@ class LocationInPeer{
 
 class FileMetaData{
     public:
-        std::string fileName; 
-        std::string hash; // 
-        std::vector<LocationInPeer> clients;
+        std::string fileName;
+        std::string fileSize;
+        std::vector<std::string> hashOfChunks;
+        std::vector<PeerInfo> clientsHavingThisFile;
 };
 
 class Group{
+    private:
+        pthread_mutex_t lockGroupFilesShared;
     public:
         std::string id;
         std::string ownwer;
         std::vector<std::string> members;
         //filesName -> FileMetaData
-        std::unordered_map<std::string,FileMetaData*> filesShared; 
+        std::unordered_map<std::string,FileMetaData*> filesShared;  //fileName,FileMetaData
+        void updatePeerListInGroup(std::string fileName,PeerInfo peer){
+            pthread_mutex_lock(&lockGroupFilesShared);
+            this->filesShared[fileName]->clientsHavingThisFile.push_back(peer);
+            pthread_mutex_unlock(&lockGroupFilesShared);
+        };
+
+        bool peerPresentInList(std::string fileName,std::string user_id){
+            if(filesShared.find(fileName) == filesShared.end()){
+                std::cout<<"filename is not present in group "<<id<<std::endl;
+                return false;
+            }
+            else{
+                for(auto p : filesShared[fileName]->clientsHavingThisFile){
+                    if(p.user_id == user_id)
+                        return true;
+                }
+                return false;
+            }
+        }
 };
 
 std::unordered_map<std::string,Peer*> peerMap;
@@ -70,6 +92,19 @@ pthread_mutex_t lockGroupMap;
 
 std::string delim = ">>=";
 
+std::vector<std::string> getTokens(std::string input){
+    std::vector<std::string> result;
+    
+    size_t pos = 0;
+    std::string token;
+    while((pos = input.find(delim))!=std::string::npos){
+        token = input.substr(0,pos);
+        result.push_back(token);
+        input.erase(0,pos+delim.length());
+    }
+    result.push_back(input);
+    return result;
+}
 
 int makeServer(std::string ip,std::string port){
     int sock_fd;
@@ -246,6 +281,123 @@ int addMemberToGroup(std::string user_id,std::string group_id){
     return 0;
 }
 
+bool isHashEqual(std::vector<std::string> h1,std::vector<std::string> h2){
+    if(h1.size() != h2.size())
+        return false;
+    else{
+        for(int i=0;i<h1.size();i++){
+            if(h1[i] != h2[i])
+                return false;
+        }
+        return true;
+    }
+}
+
+void upload_file_exitHelper(int new_fd){
+    //this part is added so that whatever peer sends get synnced with recv for later
+    std::string sizePlusNoOfHashes = getStringFromSocket(new_fd);
+    std::vector<std::string> tokens = getTokens(sizePlusNoOfHashes);
+    std::string size = tokens[0];
+    int noOfBlocks = std::stoi(tokens[1]);
+
+    std::vector<std::string> ignore;
+    for(int i=0;i<noOfBlocks;i++){
+        ignore.push_back(getStringFromSocket(new_fd));
+    }
+
+}
+std::string upload_file(int new_fd,std::string filePath,std::string group_id,std::string user_id){
+    std::string status;
+    if(user_id==""){
+        status = "First login to upload file";
+        upload_file_exitHelper(new_fd);
+    }
+    else{
+        if(groupMap.find(group_id) == groupMap.end()){
+            status = "Group does not exist with group_id :";
+            status.append(group_id);
+            upload_file_exitHelper(new_fd);
+        }
+        else{
+            Group* group = groupMap[group_id];
+            auto x=std::find(group->members.begin(),group->members.end(),user_id);
+            if(x==group->members.end()){
+                status = "User does not belong to group ";status.append(group_id);
+                upload_file_exitHelper(new_fd);
+            }
+            else{
+                //now user can upload file
+
+                //get file name
+                std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
+
+                //get hash of each block and total size of file
+                std::string sizePlusNoOfHashes = getStringFromSocket(new_fd);
+                std::vector<std::string> tokens = getTokens(sizePlusNoOfHashes);
+                std::string size = tokens[0];
+                int noOfBlocks = std::stoi(tokens[1]);
+
+                std::vector<std::string> hashOfChunks;
+                for(int i=0;i<noOfBlocks;i++){
+                    hashOfChunks.push_back(getStringFromSocket(new_fd));
+                    std::cout<<hashOfChunks[i]<<std::endl;
+                }
+
+                //make the PeerInfo object
+                auto peer = PeerInfo();
+                peer.filePathInPeer = filePath;
+                peer.user_id = user_id;
+
+                //make Filemetadata obj
+                auto fileMetaData = new FileMetaData();
+                fileMetaData->fileSize = size;
+                fileMetaData->hashOfChunks = hashOfChunks;
+                fileMetaData->clientsHavingThisFile.push_back(peer);
+                fileMetaData->fileName = fileName;
+
+                //check if file is already shared 
+                auto y = group->filesShared.find(fileName);
+                if(y==group->filesShared.end()){ //not shared by any peer before
+                    group->filesShared[fileName] = fileMetaData;
+                    status = "File shared. I am the first peer to share this file \n"; 
+                }
+                else{ // has been already shared by some peer before
+                    //so now match hash and then add peer to list of peer in filemeta data
+                    auto hashSaved = group->filesShared[fileName]->hashOfChunks;
+                    if(!isHashEqual(hashSaved,hashOfChunks)){
+                        status = "There exists a file with same name but diff hash(content). Change name for uploading";
+                    }
+                    else{
+                        //now hashes are equal
+
+                        //check is user_id is already in list of clients
+                        auto peersSharedThisFile = group->filesShared[fileName]->clientsHavingThisFile;
+                        if(group->peerPresentInList(fileName,user_id)){ 
+                            status =fileName;
+                            status.append("Already shared by this peer");
+                        }
+                        else{
+                            //need to add peer to the list
+                            group->updatePeerListInGroup(fileName,peer);
+                            status = "File shared. Other peers also exists who have shared this file";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending status signal failed in create group \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    std::cout<<"end of upload file"<<std::endl;
+    return status;
+}
+
 std::string create_group(int new_fd,std::string user_id,std::string group_id){
 
     Group* group = new Group();
@@ -363,6 +515,27 @@ std::string list_requests(int new_fd,std::string user_id,std::string group_id){
     return status;
 }
 
+std::string list_groups(int new_fd){
+    std::string status;
+    if(groupMap.size() == 0){
+        status = "No groups created yet ";
+    }
+    else{
+        for(auto g : groupMap){
+            status.append(g.first).append("\n");
+        }
+    }
+    if(send(new_fd,status.c_str(),status.size(),0) == -1){
+        printf("sending status in list group \n");
+        close(new_fd);
+        exit(1);
+    }
+
+    dummyRecv(new_fd);
+    std::cout<<"end of list group"<<std::endl;
+    return status;
+}
+
 std::string join_group(int new_fd,std::string user_id,std::string group_id){
     std::string status;
     if(user_id==""){
@@ -452,19 +625,6 @@ std::string login(int new_fd,std::string user_id,std::string passwd,std::string&
     return retStrPeer;
 } 
 
-std::vector<std::string> getTokens(std::string input){
-    std::vector<std::string> result;
-    
-    size_t pos = 0;
-    std::string token;
-    while((pos = input.find(delim))!=std::string::npos){
-        token = input.substr(0,pos);
-        result.push_back(token);
-        input.erase(0,pos+delim.length());
-    }
-    result.push_back(input);
-    return result;
-}
 
 void* serviceToPeer(void* i){ //this runs in a separate thread
     int new_fd = *((int *)i);
@@ -478,9 +638,17 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
         std::cout<<"command is "<<command<<std::endl;
         
         if(command == "upload_file"){
-            std::cout<<" peer wants to upload file "<<std::endl;
-            acceptTorFileFromPeer(new_fd);
+            if(tokens.size() != 3){
+                std::cout<<"wrong format for upload_file "<<std::endl;
+            }
+            else{
+                std::cout<<"file_upload called "<<std::endl;
+                std::string status = upload_file(new_fd,tokens[1],tokens[2],currUser);
+                std::cout<<status<<std::endl;
+            }
+            //acceptTorFileFromPeer(new_fd);
         }
+
         else if(command == "create_user"){
             if(tokens.size() != 5){
                 std::cout<<"wrong format for create user "<<std::endl;
@@ -541,6 +709,13 @@ void* serviceToPeer(void* i){ //this runs in a separate thread
                 std::cout<<"wrong format for join group "<<std::endl;
             }
             std::cout<<join_group(new_fd,currUser,tokens[1])<<std::endl;
+        }
+
+        else if(command == "list_groups"){
+            if(tokens.size() != 1 ){
+                std::cout<<"wrong format for list group "<<std::endl;
+            }
+            std::cout<<list_groups(new_fd)<<std::endl;
         }
 
         else if(command == "list_requests"){
@@ -605,7 +780,6 @@ int main(int argc,char *argv[]){
 
         //should make another thread here to handle peer request individually
         int* fd =(int *)malloc(sizeof(*fd));
-        //check malloc
         if(fd == NULL){
             std::cout<<"Malloc failed for creating thread "<<std::endl;
             close(new_fd);
