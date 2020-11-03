@@ -359,7 +359,7 @@ std::string upload_file(int new_fd,std::string filePath,std::string group_id,std
                 auto y = group->filesShared.find(fileName);
                 if(y==group->filesShared.end()){ //not shared by any peer before
                     group->filesShared[fileName] = fileMetaData;
-                    status = "File shared. I am the first peer to share this file \n"; 
+                    status = "File shared"; 
                 }
                 else{ // has been already shared by some peer before
                     //so now match hash and then add peer to list of peer in filemeta data
@@ -379,7 +379,7 @@ std::string upload_file(int new_fd,std::string filePath,std::string group_id,std
                         else{
                             //need to add peer to the list
                             group->updatePeerListInGroup(fileName,peer);
-                            status = "File shared. Other peers also exists who have shared this file";
+                            status = "File shared";
                         }
                     }
                 }
@@ -517,6 +517,7 @@ std::string list_requests(int new_fd,std::string user_id,std::string group_id){
 
 void getPeersWithFile_exitHelper(int new_fd){
     std::string peerListSizeStr = "0";
+    peerListSizeStr.append(delim).append("0");
     if(send(new_fd,peerListSizeStr.c_str(),peerListSizeStr.size(),0) == -1){
         printf("sending no of peers in get peers with file failed \n");
         close(new_fd);
@@ -550,8 +551,9 @@ std::string getPeersWithFile(int new_fd,std::string group_id,std::string fileNam
                 getPeersWithFile_exitHelper(new_fd);
             }
             else{
-                std::string peerListSizeStr = std::to_string(group->filesShared[fileName]->clientsHavingThisFile.size());
-                status = "sending no of peers :";status.append(peerListSizeStr);
+                std::string peerListSizeStr = group->filesShared[fileName]->fileSize;
+                peerListSizeStr.append(delim).append(std::to_string(group->filesShared[fileName]->clientsHavingThisFile.size()));
+                status = "sending no of peers :";status.append(std::to_string(group->filesShared[fileName]->clientsHavingThisFile.size()));
                 if(send(new_fd,peerListSizeStr.c_str(),peerListSizeStr.size(),0) == -1){
                     printf("sending no of peers in get peers with file failed \n");
                     close(new_fd);
@@ -603,6 +605,7 @@ std::string getPeersWithFile(int new_fd,std::string group_id,std::string fileNam
     std::cout<<"end of get peers with files"<<std::endl;
     return status;
 }
+
 std::string list_files(int new_fd,std::string group_id){
     std::string status;
     std::string noOfFilesStr = "0";
@@ -651,6 +654,7 @@ std::string list_files(int new_fd,std::string group_id){
     std::cout<<"end of list files"<<std::endl;
     return status;
 }
+
 std::string list_groups(int new_fd){
     std::string status;
     if(groupMap.size() == 0){

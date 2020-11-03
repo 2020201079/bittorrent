@@ -12,6 +12,7 @@
 #include<vector>
 #include<pthread.h>
 #include<fstream>
+#include<unordered_map>
 
 #define MAXDATASIZE 100 // for passing strings as commands
 
@@ -21,7 +22,20 @@ std::string portNoToShareFiles;
 std::string IPTolisten;
 std::string delim = ">>=";
 
-class PeerInfo{
+std::string tracker1Port,tracker2Port; 
+std::string tracker1IP,tracker2IP;
+
+class FileInfo{
+    public:
+    std::string fileName;
+    std::string localPath;
+    std::vector<bool> bitVector;
+    std::vector<std::string> hashBlocks;
+    int fileSize;
+    int numberOfChunks; 
+};
+
+class PeerInfo{ //these details will be recv from tracker for downloading
     public:
         std::string user_id;
         std::string destinationPath;
@@ -32,6 +46,15 @@ class PeerInfo{
             this->address = address;
         }
 };
+
+std::unordered_map<std::string,FileInfo*> filesSharedMap;
+pthread_mutex_t lockFilesSharedMap;
+void updateFilesSharedMap(std::string fileName, FileInfo* fileInfo){
+    pthread_mutex_lock(&lockFilesSharedMap);
+    filesSharedMap[fileName] = fileInfo;
+    pthread_mutex_unlock(&lockFilesSharedMap);
+    return;
+}
 
 int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
     std::cout<<"port of tracker is "<<std::string(portOfTracker)<<std::endl;
@@ -59,11 +82,26 @@ int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
 
     char s[INET6_ADDRSTRLEN];
     inet_ntop(res->ai_family,&((struct sockaddr_in *)res->ai_addr)->sin_addr,s,sizeof s);
-    printf("peer connected to tracker %s\n",s);
+    //printf("peer connected to tracker %s\n",s);
+    std::cout<<"peer connected to "<<tracker1IP<<":"<<portOfTracker<<std::endl;
 
     freeaddrinfo(res); // no need of this struct after connecting
 
     return sock_fd;
+}
+
+std::vector<std::string> getTokens(std::string input){
+    std::vector<std::string> result;
+    
+    size_t pos = 0;
+    std::string token;
+    while((pos = input.find(delim))!=std::string::npos){
+        token = input.substr(0,pos);
+        result.push_back(token);
+        input.erase(0,pos+delim.length());
+    }
+    result.push_back(input);
+    return result;
 }
 
 int dummySend(int new_fd){
@@ -139,6 +177,15 @@ int dummyRecv(int sock_fd){
     return 0;
 }
 
+void sendStringToSocket(int sock_fd,std::string str){
+    if(send(sock_fd,str.c_str(),str.size(),0) == -1){
+        std::cout<<"Sending failed :"<<str<<std::endl;
+        close(sock_fd);
+        exit(1);
+    }
+    dummyRecv(sock_fd);
+}
+
 std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
     std::vector<std::pair<int,std::string>> hashBlocks(0);
     // open the file fd is file descriptor
@@ -204,7 +251,7 @@ std::vector<std::pair<int,std::string>> getHashOfFile(std::string filePath){
 int upload_file(int sock_fd,std::string filePath,std::string group_id){
     std::string commandToSend = "upload_file";
     commandToSend.append(delim).append(filePath).append(delim).append(group_id);
-
+    std::vector<std::pair<int,std::string>> hashBlocks;
     if (send(sock_fd,commandToSend.c_str(),commandToSend.length(),0) == -1){
         printf("sending command login failed \n");
         close(sock_fd);
@@ -214,7 +261,7 @@ int upload_file(int sock_fd,std::string filePath,std::string group_id){
     dummyRecv(sock_fd);
 
     //now have to send size+hashBlocks
-    std::vector<std::pair<int,std::string>> hashBlocks = getHashOfFile(filePath); //uncessarily added int 
+    hashBlocks = getHashOfFile(filePath); //uncessarily added int 
     int noOfBlocks = hashBlocks.size();
     int sizeOfFile = 0;
     for(auto p:hashBlocks)
@@ -227,10 +274,11 @@ int upload_file(int sock_fd,std::string filePath,std::string group_id){
         exit(1);
     }
     dummyRecv(sock_fd);
-    
+    std::vector<std::string> hashs;
     for(auto h: hashBlocks){
+        hashs.push_back(h.second);
         if (send(sock_fd,h.second.c_str(),h.second.length(),0) == -1){
-        printf("sending size + hash failed \n");
+        printf("sending hash blocks failed \n");
         close(sock_fd);
         exit(1);
         }
@@ -240,6 +288,29 @@ int upload_file(int sock_fd,std::string filePath,std::string group_id){
 
     std::string status = getStringFromSocket(sock_fd);
     std::cout<<status<<std::endl;
+    std::string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
+    if(status == "File shared"){
+        //create the fileInfo object then add it to the map
+        auto fileInfo = new FileInfo();
+        fileInfo->fileName = fileName;
+        fileInfo->bitVector = std::vector<bool>(hashs.size(),true);
+        fileInfo->hashBlocks = hashs;
+        fileInfo->localPath = filePath;
+        fileInfo->numberOfChunks = hashs.size();
+        fileInfo->fileSize = sizeOfFile;
+        updateFilesSharedMap(fileName,fileInfo);
+    }
+    std::cout<<"Number of files shared is "<<filesSharedMap.size()<<std::endl;
+    for(auto p:filesSharedMap){
+        std::cout<<p.first;
+        for(auto b : p.second->bitVector){
+            if(b==true)
+                std::cout<<"1"<<" ";
+            else
+                std::cout<<"0"<<" ";
+        }
+        std::cout<<std::endl;
+    }
     return 0;
 }
 
@@ -337,7 +408,7 @@ int create_user(int sock_fd,std::string user_id,std::string passwd){
     return 0;
 }
 
-std::vector<PeerInfo> getPeersWithFile(int sock_fd,std::string group_id,std::string fileName){ //need to run this in a thread
+std::vector<PeerInfo> getPeersWithFile(int sock_fd,std::string group_id,std::string fileName,int& fileSize){ //need to run this in a thread
     std::string commandToSend = "getPeersWithFile";
     commandToSend.append(delim).append(group_id).append(delim).append(fileName);
 
@@ -350,7 +421,10 @@ std::vector<PeerInfo> getPeersWithFile(int sock_fd,std::string group_id,std::str
     }
     dummyRecv(sock_fd);
 
-    int noOfPeers = std::stoi(getStringFromSocket(sock_fd));
+    std::string sizePlusNumberOfPeers = getStringFromSocket(sock_fd);
+    auto tokens = getTokens(sizePlusNumberOfPeers);
+    fileSize = std::stoi(tokens[0]);
+    int noOfPeers = std::stoi(tokens[1]);
     std::cout<<"Number of peers with "<< fileName <<" is "<<noOfPeers<<std::endl;
     std::vector<PeerInfo> peerList;
     for(int i=0;i<noOfPeers;i++){
@@ -364,6 +438,7 @@ std::vector<PeerInfo> getPeersWithFile(int sock_fd,std::string group_id,std::str
     std::cout<<status<<std::endl;
     return peerList;
 }
+
 int list_files(int sock_fd,std::string group_id){
     std::string commandToSend = "list_files";
     commandToSend.append(delim).append(group_id);
@@ -423,6 +498,87 @@ int list_requests(int sock_fd,std::string group_id){
 
 }
 
+std::vector<bool> getBitVector(std::string fileName,std::string address){
+    std::vector<bool> result;
+    std::string port = address.substr(address.find_last_of(":") + 1);
+    std::string IP = address.substr(0,address.find_last_of(":"));
+
+    int sock_fd = makeConnectionToTracker(IP.c_str(),port.c_str());
+
+    std::string commandToSend = "getBitVector";
+    commandToSend.append(delim).append(fileName);
+
+    sendStringToSocket(sock_fd,commandToSend);
+
+    std::string status = getStringFromSocket(sock_fd);
+    close(sock_fd);
+    if(status == "failed"){
+        std::cout<<"Getting bit vector from "<<address<<" failed"<<std::endl;
+        close(sock_fd);
+        return result;
+    }
+    else{
+        auto tokens = getTokens(status);
+        for(auto t:tokens){
+            if(t == "1")
+                result.push_back(true);
+            else if(t=="0")
+                result.push_back(false);
+        }
+        close(sock_fd);
+        return result;
+    }
+
+}
+void* downloadFile(void* args){
+
+    printf("%s\n", (char *)args);
+    std::string input = std::string((char * )args);
+    free(args);
+    std::cout<<"recvd in new thread: "<<input<<std::endl;
+    std::vector<std::string> tokens = getTokens(input);
+    std::string group_id = tokens[0];
+    std::string file_name = tokens[1];
+    std::string destinationPath = tokens[2];
+    int sock_fd = std::stoi(tokens[3]);
+
+    int fileSize = 0;
+    std::vector<PeerInfo> peerList = getPeersWithFile(sock_fd,group_id,file_name,fileSize);
+    std::cout<<"Size of the file is "<<fileSize<<std::endl;
+    for(auto p:peerList)
+        std::cout<<p.user_id<<":"<<p.address<<std::endl;
+    
+    //after downloading atleast one chunk need to inform tracker call upload_file() 
+    //not closing the connection yet with the tracker.
+
+    //need to get the bit vector from each peer
+    std::unordered_map<std::string,std::vector<bool>> bitVectorMap; //peer.user_id, bitvector
+    for(auto p:peerList){
+        std::vector<bool> bv = getBitVector(file_name,p.address);
+        if(bv.empty()){
+            std::cout<<"getting bit vector from "<<p.user_id<<" failed"<<std::endl;
+        }
+        else{
+            bitVectorMap[p.user_id] = bv;
+        }
+    }
+
+    getFileFrom(file_name,peerList[0],destinationPath);
+}
+
+void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath){
+    fopen(destPath.c_str(),"w")
+}
+
+bool isShared(std::string fileName){
+    if(filesSharedMap.find(fileName) == filesSharedMap.end()){
+        return false;
+    }
+    else{
+        return true;
+    }
+}
+
 void* fileSharer(void* argv){
     int sock_fd = makeServer(IPTolisten,portNoToShareFiles);
     while(1){
@@ -438,9 +594,46 @@ void* fileSharer(void* argv){
         inet_ntop(client_address.ss_family,&((struct sockaddr_in *)&client_address)->sin_addr,s,sizeof s);
         printf("Server got connection from %s\n",s);
         
-        std::cout<<getStringFromSocket(new_fd)<<std::endl;
-        dummySend(new_fd); 
-        fflush(stdout);
+        std::string stringFromPeer = getStringFromSocket(new_fd);
+        std::cout<<stringFromPeer<<std::endl;
+        std::vector<std::string> tokens = getTokens(stringFromPeer);
+        std::string command = tokens[0];
+        std::cout<<"command is "<<command<<std::endl;
+        if(command == "getBitVector"){
+            std::string status;
+            if(tokens.size() != 2){
+                std::cout<<"wrong format for getBitVector "<<std::endl;
+                status = "failed";
+            }
+            else{
+                std::string fileName = tokens[1];
+                if(!isShared(fileName)){
+                    std::cout<<fileName<<" is not shared."<<std::endl;
+                    status = "failed";
+                }
+                else{
+                    std::cout<<"Need to send bit vector of"<<fileName<<std::endl;
+                    auto v = filesSharedMap[fileName]->bitVector;
+                    status = "";
+                    for(int i=0;i<v.size()-1;i++){
+                        if(v[i] == true)
+                            status.append("1").append(delim);
+                        else
+                            status.append("0").append(delim);
+                        std::cout<<"Status :"<<status<<std::endl;
+                    }
+
+                    if(v[v.size()-1] == true)
+                        status.append("1").append(delim);
+                    else
+                        status.append("0").append(delim);
+                    std::cout<<"Status :"<<status<<std::endl;
+                }
+            }
+
+            std::cout<<"Sending: "<<status<<std::endl;
+            sendStringToSocket(new_fd,status);
+        }
     }
 }
 
@@ -453,12 +646,12 @@ int main(int argc,char* argv[]){
     std::ifstream MyReadFile(argv[2]);
 
     getline(MyReadFile,tracker1);
-    std::string tracker1Port = tracker1.substr(tracker1.find_last_of(":") + 1);
-    std::string tracker1IP = tracker1.substr(0,tracker1.find_last_of(":"));
+    tracker1Port = tracker1.substr(tracker1.find_last_of(":") + 1);
+    tracker1IP = tracker1.substr(0,tracker1.find_last_of(":"));
 
     getline(MyReadFile,tracker2);
-    std::string tracker2Port = tracker2.substr(tracker1.find_last_of(":") + 1);
-    std::string tracker2IP = tracker2.substr(0,tracker1.find_last_of(":"));
+    tracker2Port = tracker2.substr(tracker1.find_last_of(":") + 1);
+    tracker2IP = tracker2.substr(0,tracker1.find_last_of(":"));
 
     std::string peerAddr = argv[1];
     std::string peerPort = peerAddr.substr(peerAddr.find_last_of(":")+1);
@@ -542,9 +735,22 @@ int main(int argc,char* argv[]){
 
         else if(command == "download_file"){
             std::string group_id,file_name,destinationPath;std::cin>>group_id>>file_name>>destinationPath;
-            std::vector<PeerInfo> peerList = getPeersWithFile(sock_fd,group_id,file_name);
-            for(auto p:peerList)
-                std::cout<<p.user_id<<std::endl;
+            std::string args = group_id.append(delim).append(file_name).append(delim).append(destinationPath)\
+            .append(delim).append(std::to_string(sock_fd));
+
+            char* stringa1 = (char*) malloc((args.size()+1)*sizeof(char));
+
+            for(int i=0;i<args.size();i++){
+                stringa1[i] = args[i];
+            }
+            stringa1[args.size()] = '\0';
+
+            printf("%s\n", stringa1);
+            std::cout<<"Calling thread now"<<std::endl;
+            pthread_t threadToDownloadFile;
+            pthread_create(&threadToDownloadFile,NULL,downloadFile,stringa1);
+            
+
             // should download file from each peer later
         }
 
