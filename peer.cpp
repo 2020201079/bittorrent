@@ -65,29 +65,34 @@ int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
     hints.ai_family = AF_INET; // ipv4
     hints.ai_socktype = SOCK_STREAM; // for tcp
 
-    if(getaddrinfo(trackerIP,portOfTracker,&hints,&res) != 0){
-        std::cout<<std::string(trackerIP)<<std::endl;
-        std::cout<<std::string(trackerIP)<<std::endl;
-        printf("Get addr info failed \n");
-        exit(1);
+    try{
+        if(getaddrinfo(trackerIP,portOfTracker,&hints,&res) != 0){
+            std::cout<<std::string(trackerIP)<<std::string(portOfTracker)<<std::endl;
+            printf("Get addr info failed \n");
+            throw("Get addr info failed \n");
+            return -1;
+            }
+        sock_fd = socket(res->ai_family,res->ai_socktype,res->ai_protocol);
+
+        if(connect(sock_fd,res->ai_addr,res->ai_addrlen) == -1){
+            close(sock_fd);
+            printf("connect failed \n");
+            throw("connect failed \n");
+            return -1;
+        }
+        
+        char s[INET6_ADDRSTRLEN];
+        inet_ntop(res->ai_family,&((struct sockaddr_in *)res->ai_addr)->sin_addr,s,sizeof s);
+        //printf("peer connected to tracker %s\n",s);
+        std::cout<<"peer connected to "<<tracker1IP<<":"<<portOfTracker<<std::endl;
+
+        freeaddrinfo(res); // no need of this struct after connecting
+
+        return sock_fd;
     }
-
-    sock_fd = socket(res->ai_family,res->ai_socktype,res->ai_protocol);
-
-    if(connect(sock_fd,res->ai_addr,res->ai_addrlen) == -1){
-        close(sock_fd);
-        printf("connect failed \n");
-        exit(1);
+    catch(std::string error){
+        throw(error);
     }
-
-    char s[INET6_ADDRSTRLEN];
-    inet_ntop(res->ai_family,&((struct sockaddr_in *)res->ai_addr)->sin_addr,s,sizeof s);
-    //printf("peer connected to tracker %s\n",s);
-    std::cout<<"peer connected to "<<tracker1IP<<":"<<portOfTracker<<std::endl;
-
-    freeaddrinfo(res); // no need of this struct after connecting
-
-    return sock_fd;
 }
 
 std::vector<std::string> getTokens(std::string input){
@@ -498,6 +503,7 @@ int list_requests(int sock_fd,std::string group_id){
 
 }
 
+
 std::vector<bool> getBitVector(std::string fileName,std::string address){
     std::vector<bool> result;
     std::string port = address.substr(address.find_last_of(":") + 1);
@@ -530,6 +536,45 @@ std::vector<bool> getBitVector(std::string fileName,std::string address){
     }
 
 }
+
+void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int fileSize){
+
+    std::string address = peer.address;
+    std::string port = address.substr(address.find_last_of(":") + 1);
+    std::string IP = address.substr(0,address.find_last_of(":"));
+    int sock_fd;
+    try{
+        sock_fd = makeConnectionToTracker(IP.c_str(),port.c_str());
+    }
+    catch(std::string error){
+        std::cout<<error<<std::endl;
+        std::cout<<"Download failed as couldn't connect with peer "<<std::endl;
+        return;
+    }
+    
+    std::string command = "getFile";
+    command.append(delim).append(file_name);
+    sendStringToSocket(sock_fd,command);
+
+    std::string fileSizeStr = getStringFromSocket(sock_fd);
+    int fileSize = std::stoi(fileSizeStr);
+
+    char buf[fileSize] = {0};
+    int numbytes;
+
+    if((numbytes = recv(sock_fd,buf,fileSize,0))==-1){
+        printf("error recienving string");
+        exit(1);
+    }
+    std::string recvString(buf);
+
+    std::cout<<"recvd :"<<recvString<<std::endl;
+
+    std::ofstream destFile(destPath);
+    destFile<<recvString;
+    std::cout<<"got file from peer"<<std::endl;
+}
+
 void* downloadFile(void* args){
 
     printf("%s\n", (char *)args);
@@ -563,11 +608,42 @@ void* downloadFile(void* args){
         }
     }
 
-    getFileFrom(file_name,peerList[0],destinationPath);
+    getFileFrom(file_name,peerList[0],destinationPath,fileSize);
 }
 
-void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath){
-    fopen(destPath.c_str(),"w")
+void* sendFile(void* args){ //this runs in a separate thread
+    printf("%s\n", (char *)args);
+    std::string input = std::string((char * )args);
+    free(args);
+    std::cout<<"recvd in thread of sendFile: "<<input<<std::endl;
+    std::vector<std::string> tokens = getTokens(input);
+    int new_fd = std::stoi(tokens[0]);
+    std::string file_name = tokens[1];
+    FileInfo* fInfo = filesSharedMap[file_name];
+    std::string fileToSend = filesSharedMap[file_name]->localPath;
+    
+    //sending size first to peer
+    int fileSize = filesSharedMap[file_name]->fileSize;
+    std::string fileSizeStr = std::to_string(fileSize);
+    sendStringToSocket(new_fd,fileSizeStr);
+    
+    char bufToSend[fileSize];
+    std::ifstream fileStream(fileToSend);
+    fileStream.read(bufToSend,fileSize);
+
+    std::cout<<"File read for sending :"<<bufToSend<<std::endl;
+    
+    //-----------adding now --------------------
+    if(send(new_fd,bufToSend,fileSize,0) == -1){
+        std::cout<<"Sending failed :"<<bufToSend<<std::endl;
+        close(new_fd);
+        exit(1);
+    }
+    dummyRecv(new_fd);
+
+    //---------adding now in between ----------------
+    close(new_fd);
+    std::cout<<"File sent"<<std::endl;
 }
 
 bool isShared(std::string fileName){
@@ -633,6 +709,36 @@ void* fileSharer(void* argv){
 
             std::cout<<"Sending: "<<status<<std::endl;
             sendStringToSocket(new_fd,status);
+        }
+
+        else if(command == "getFile"){
+            if(tokens.size() != 2){
+                std::cout<<"wrong format for getFile "<<std::endl;
+            }
+            std::string file_name = tokens[1];
+            if(!isShared(file_name)){
+                std::cout<<"File not shared by peer "<<std::endl;
+                close(new_fd);
+            }
+            else{
+                std::string args = std::to_string(new_fd);
+                args.append(delim).append(file_name); 
+
+                char* stringa1 = (char*) malloc((args.size()+1)*sizeof(char));
+
+                for(int i=0;i<args.size();i++){
+                    stringa1[i] = args[i];
+                }
+
+                stringa1[args.size()] = '\0';
+                //make a new thread and keep sending file from there
+                pthread_t threadForSendingFile;
+                pthread_create(&threadForSendingFile,NULL,sendFile,stringa1);
+            }
+        }
+
+        else{
+            std::cout<<"Not a valid command "<<std::endl;
         }
     }
 }
