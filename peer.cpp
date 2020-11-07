@@ -16,7 +16,9 @@
 
 #define MAXDATASIZE 100 // for passing strings as commands
 
-int blockSize = 512*1024;
+//int blockSize = 512*1024;
+int blockSize = 4;
+
 int hashOutputSize = 20;
 std::string portNoToShareFiles;
 std::string IPTolisten;
@@ -537,8 +539,8 @@ std::vector<bool> getBitVector(std::string fileName,std::string address){
 
 }
 
-void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int fileSize){
-
+void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int chunkNo){
+    std::cout<<"chunk no is:"<<chunkNo<<std::endl;
     std::string address = peer.address;
     std::string port = address.substr(address.find_last_of(":") + 1);
     std::string IP = address.substr(0,address.find_last_of(":"));
@@ -553,16 +555,16 @@ void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int fi
     }
     
     std::string command = "getFile";
-    command.append(delim).append(file_name);
+    command.append(delim).append(file_name).append(delim).append(std::to_string(chunkNo));
     sendStringToSocket(sock_fd,command);
 
-    std::string fileSizeStr = getStringFromSocket(sock_fd);
-    int fileSize = std::stoi(fileSizeStr);
+    std::string chunkSizeStr = getStringFromSocket(sock_fd);
+    int chunkSize = std::stoi(chunkSizeStr);
 
-    char buf[fileSize] = {0};
+    char buf[chunkSize] = {0};
     int numbytes;
 
-    if((numbytes = recv(sock_fd,buf,fileSize,0))==-1){
+    if((numbytes = recv(sock_fd,buf,chunkSize,0))==-1){
         printf("error recienving string");
         exit(1);
     }
@@ -570,8 +572,12 @@ void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int fi
 
     std::cout<<"recvd :"<<recvString<<std::endl;
 
-    std::ofstream destFile(destPath);
-    destFile<<recvString;
+    //std::ofstream destFile(destPath);
+    //destFile.seekp((chunkNo-1)*chunkSize);
+    std::ofstream destFile;
+    destFile.open(destPath,std::ofstream::out | std::ofstream::app);
+    destFile.write(buf,chunkSize);
+    destFile.close();
     std::cout<<"got file from peer"<<std::endl;
 }
 
@@ -607,9 +613,21 @@ void* downloadFile(void* args){
             bitVectorMap[p.user_id] = bv;
         }
     }
-
-    getFileFrom(file_name,peerList[0],destinationPath,fileSize);
+    int noOfBlocks = bitVectorMap[peerList[0].user_id].size();
+    std::cout<<"number of blocks to read"<<noOfBlocks<<std::endl;
+    for(int i=1;i<=noOfBlocks;i++)
+        getFileFrom(file_name,peerList[0],destinationPath,i);
 }
+
+int getChunkSize(int chunkNo,int NoOfChunks,int fileSize){
+    if(chunkNo < NoOfChunks)
+        return blockSize;
+    else if(chunkNo == NoOfChunks){
+        return fileSize-((NoOfChunks-1)*blockSize);
+    }
+}
+
+//-----------------------------send --------------------------------------//
 
 void* sendFile(void* args){ //this runs in a separate thread
     printf("%s\n", (char *)args);
@@ -619,29 +637,32 @@ void* sendFile(void* args){ //this runs in a separate thread
     std::vector<std::string> tokens = getTokens(input);
     int new_fd = std::stoi(tokens[0]);
     std::string file_name = tokens[1];
+    int chunkNumber = std::stoi(tokens[2]);
+
     FileInfo* fInfo = filesSharedMap[file_name];
     std::string fileToSend = filesSharedMap[file_name]->localPath;
-    
-    //sending size first to peer
-    int fileSize = filesSharedMap[file_name]->fileSize;
-    std::string fileSizeStr = std::to_string(fileSize);
-    sendStringToSocket(new_fd,fileSizeStr);
-    
-    char bufToSend[fileSize];
-    std::ifstream fileStream(fileToSend);
-    fileStream.read(bufToSend,fileSize);
 
-    std::cout<<"File read for sending :"<<bufToSend<<std::endl;
+    //sending chunk size first to peer
+    int fileSize = filesSharedMap[file_name]->fileSize;
+    int chunkSize = getChunkSize(chunkNumber,filesSharedMap[file_name]->numberOfChunks,fileSize);
+
+    std::string chunkSizeStr = std::to_string(chunkSize);
+    sendStringToSocket(new_fd,chunkSizeStr);
     
-    //-----------adding now --------------------
-    if(send(new_fd,bufToSend,fileSize,0) == -1){
+    char bufToSend[chunkSize];
+    std::ifstream fileStream(fileToSend);
+    fileStream.seekg((chunkNumber-1)*blockSize);
+    fileStream.read(bufToSend,chunkSize);
+
+    std::cout<<"File read for sending :"<<std::string(bufToSend)<<std::endl;
+    
+    if(send(new_fd,bufToSend,chunkSize,0) == -1){
         std::cout<<"Sending failed :"<<bufToSend<<std::endl;
         close(new_fd);
         exit(1);
     }
     dummyRecv(new_fd);
 
-    //---------adding now in between ----------------
     close(new_fd);
     std::cout<<"File sent"<<std::endl;
 }
@@ -696,7 +717,6 @@ void* fileSharer(void* argv){
                             status.append("1").append(delim);
                         else
                             status.append("0").append(delim);
-                        std::cout<<"Status :"<<status<<std::endl;
                     }
 
                     if(v[v.size()-1] == true)
@@ -712,9 +732,10 @@ void* fileSharer(void* argv){
         }
 
         else if(command == "getFile"){
-            if(tokens.size() != 2){
+            if(tokens.size() != 3){
                 std::cout<<"wrong format for getFile "<<std::endl;
             }
+            std::string chunkNum = tokens[2];
             std::string file_name = tokens[1];
             if(!isShared(file_name)){
                 std::cout<<"File not shared by peer "<<std::endl;
@@ -722,7 +743,7 @@ void* fileSharer(void* argv){
             }
             else{
                 std::string args = std::to_string(new_fd);
-                args.append(delim).append(file_name); 
+                args.append(delim).append(file_name).append(delim).append(chunkNum); 
 
                 char* stringa1 = (char*) malloc((args.size()+1)*sizeof(char));
 
