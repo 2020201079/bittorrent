@@ -572,13 +572,20 @@ void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int ch
 
     std::cout<<"recvd :"<<recvString<<std::endl;
 
+/*
+    FILE* fpt=fopen(destPath.c_str(),"a+");
+    fseek(fpt,(chunkNo-1)*blockSize,SEEK_SET);
+    fwrite(buf,sizeof(char),chunkSize,fpt);
+    fclose(fpt);*/
     //std::ofstream destFile(destPath);
     //destFile.seekp((chunkNo-1)*chunkSize);
     std::ofstream destFile;
-    destFile.open(destPath,std::ofstream::out | std::ofstream::app);
+    destFile.open(destPath,std::ofstream::binary|std::ofstream::app);
+    std::cout<<"seek to byte number "<< (chunkNo-1)*blockSize<<std::endl;
+    destFile.seekp((chunkNo-1)*blockSize,std::ios_base::beg);
     destFile.write(buf,chunkSize);
     destFile.close();
-    std::cout<<"got file from peer"<<std::endl;
+    std::cout<<"got chunk:<< "<<chunkNo<< "from peer"<<std::endl;
 }
 
 void* downloadFile(void* args){
@@ -615,8 +622,26 @@ void* downloadFile(void* args){
     }
     int noOfBlocks = bitVectorMap[peerList[0].user_id].size();
     std::cout<<"number of blocks to read"<<noOfBlocks<<std::endl;
-    for(int i=1;i<=noOfBlocks;i++)
-        getFileFrom(file_name,peerList[0],destinationPath,i);
+    for(int i=1;i<noOfBlocks;i++)
+        getFileFrom(file_name,peerList[0],destinationPath,i); // make this as threads !
+    
+    /*
+    // ---------------continue from here --------------
+    std::string args = file_name;
+    args.append(delim).append(file_name).append(delim).append(chunkNum); 
+
+    char* stringa1 = (char*) malloc((args.size()+1)*sizeof(char));
+
+    for(int i=0;i<args.size();i++){
+        stringa1[i] = args[i];
+    }
+
+    stringa1[args.size()] = '\0';
+    //make a new thread and keep sending file from there
+    pthread_t threadForSendingFile;
+    pthread_create(&threadForSendingFile,NULL,sendFile,stringa1);
+    //---------------------------------------------
+    */
 }
 
 int getChunkSize(int chunkNo,int NoOfChunks,int fileSize){
@@ -650,7 +675,7 @@ void* sendFile(void* args){ //this runs in a separate thread
     sendStringToSocket(new_fd,chunkSizeStr);
     
     char bufToSend[chunkSize];
-    std::ifstream fileStream(fileToSend);
+    std::ifstream fileStream(fileToSend,std::ifstream::binary);
     fileStream.seekg((chunkNumber-1)*blockSize);
     fileStream.read(bufToSend,chunkSize);
 
@@ -661,7 +686,6 @@ void* sendFile(void* args){ //this runs in a separate thread
         close(new_fd);
         exit(1);
     }
-    dummyRecv(new_fd);
 
     close(new_fd);
     std::cout<<"File sent"<<std::endl;
