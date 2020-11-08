@@ -17,7 +17,7 @@
 #define MAXDATASIZE 100 // for passing strings as commands
 
 //int blockSize = 512*1024;
-int blockSize = 4;
+int blockSize = 8;
 
 int hashOutputSize = 20;
 std::string portNoToShareFiles;
@@ -50,6 +50,7 @@ class PeerInfo{ //these details will be recv from tracker for downloading
 };
 
 std::unordered_map<std::string,FileInfo*> filesSharedMap;
+std::unordered_map<std::string,FILE*> fileDownloadPointer; //<destPath,FILE*>
 pthread_mutex_t lockFilesSharedMap;
 void updateFilesSharedMap(std::string fileName, FileInfo* fileInfo){
     pthread_mutex_lock(&lockFilesSharedMap);
@@ -58,8 +59,10 @@ void updateFilesSharedMap(std::string fileName, FileInfo* fileInfo){
     return;
 }
 
+pthread_mutex_t lockFileWrite;
+
 int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
-    std::cout<<"port of tracker is "<<std::string(portOfTracker)<<std::endl;
+    //std::cout<<"port of tracker is "<<std::string(portOfTracker)<<std::endl;
     int sock_fd,new_fd;
     struct addrinfo  hints,*res;
 
@@ -86,7 +89,7 @@ int makeConnectionToTracker(const char* trackerIP,const char* portOfTracker){
         char s[INET6_ADDRSTRLEN];
         inet_ntop(res->ai_family,&((struct sockaddr_in *)res->ai_addr)->sin_addr,s,sizeof s);
         //printf("peer connected to tracker %s\n",s);
-        std::cout<<"peer connected to "<<tracker1IP<<":"<<portOfTracker<<std::endl;
+        //std::cout<<"peer connected to "<<tracker1IP<<":"<<portOfTracker<<std::endl;
 
         freeaddrinfo(res); // no need of this struct after connecting
 
@@ -539,9 +542,21 @@ std::vector<bool> getBitVector(std::string fileName,std::string address){
 
 }
 
-void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int chunkNo){
+//void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int chunkNo){
+void* getFileFrom(void* args){
+
+    printf("%s\n", (char *)args);
+    std::string input = std::string((char * )args);
+    free(args);
+    std::cout<<"recvd in thread of sendFile: "<<input<<std::endl;
+    std::vector<std::string> tokens = getTokens(input);
+    std::string file_name = tokens[0];
+    std::string peerAddress = tokens[1];
+    std::string destPath = tokens[2];
+    int chunkNo = std::stoi(tokens[3]);
+
     std::cout<<"chunk no is:"<<chunkNo<<std::endl;
-    std::string address = peer.address;
+    std::string address = peerAddress;
     std::string port = address.substr(address.find_last_of(":") + 1);
     std::string IP = address.substr(0,address.find_last_of(":"));
     int sock_fd;
@@ -551,7 +566,7 @@ void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int ch
     catch(std::string error){
         std::cout<<error<<std::endl;
         std::cout<<"Download failed as couldn't connect with peer "<<std::endl;
-        return;
+        exit(1); //do proper error handling
     }
     
     std::string command = "getFile";
@@ -568,24 +583,39 @@ void getFileFrom(std::string file_name,PeerInfo peer,std::string destPath,int ch
         printf("error recienving string");
         exit(1);
     }
-    std::string recvString(buf);
 
-    std::cout<<"recvd :"<<recvString<<std::endl;
+    std::cout<<"got chunk : << "<<chunkNo<<std::endl;
+    std::cout<<"seek to byte number : "<< (chunkNo-1)*blockSize<<std::endl;
+    std::cout<<"recvd : ";
+    for(char c:buf){
+        std::cout<<c;
+    }
+    std::cout<<std::endl;
 
-/*
-    FILE* fpt=fopen(destPath.c_str(),"a+");
-    fseek(fpt,(chunkNo-1)*blockSize,SEEK_SET);
+
+    //FILE* fpt=fopen(destPath.c_str(),"a+");
+    pthread_mutex_lock(&lockFileWrite);
+    FILE* fpt = fileDownloadPointer[destPath];
+    if(chunkNo == 1){
+        rewind(fpt);
+    }
+    else{
+        fseek(fpt,(chunkNo-1)*blockSize,SEEK_SET);
+    }
     fwrite(buf,sizeof(char),chunkSize,fpt);
-    fclose(fpt);*/
+    pthread_mutex_unlock(&lockFileWrite);
+    close(sock_fd);
+    //fclose(fpt);
     //std::ofstream destFile(destPath);
     //destFile.seekp((chunkNo-1)*chunkSize);
-    std::ofstream destFile;
-    destFile.open(destPath,std::ofstream::binary|std::ofstream::app);
-    std::cout<<"seek to byte number "<< (chunkNo-1)*blockSize<<std::endl;
-    destFile.seekp((chunkNo-1)*blockSize,std::ios_base::beg);
-    destFile.write(buf,chunkSize);
-    destFile.close();
-    std::cout<<"got chunk:<< "<<chunkNo<< "from peer"<<std::endl;
+
+    //std::ofstream destFile;
+    //destFile.open(destPath,std::ofstream::binary|std::ofstream::app);
+    //std::cout<<"seek to byte number "<< (chunkNo-1)*blockSize<<std::endl;
+    //destFile.seekp((chunkNo-1)*blockSize,std::ios_base::beg);
+    //destFile.write(buf,chunkSize);
+    //destFile.close();
+    
 }
 
 void* downloadFile(void* args){
@@ -622,26 +652,39 @@ void* downloadFile(void* args){
     }
     int noOfBlocks = bitVectorMap[peerList[0].user_id].size();
     std::cout<<"number of blocks to read"<<noOfBlocks<<std::endl;
-    for(int i=1;i<noOfBlocks;i++)
-        getFileFrom(file_name,peerList[0],destinationPath,i); // make this as threads !
+    
+    fileDownloadPointer[destinationPath] = fopen(destinationPath.c_str(),"wb+");
     
     /*
-    // ---------------continue from here --------------
-    std::string args = file_name;
-    args.append(delim).append(file_name).append(delim).append(chunkNum); 
+    for(int i=1;i<=noOfBlocks;i++)
+        getFileFrom(file_name,peerList[0],destinationPath,i); */
 
-    char* stringa1 = (char*) malloc((args.size()+1)*sizeof(char));
+    
+    // make this as threads !
+    std::vector<pthread_t> threadsForDownload;
+    for(int i=1;i<=noOfBlocks;i++){
+        std::string argsToThread = file_name;
+        argsToThread.append(delim).append(peerList[0].address).append(delim).append(destinationPath)\
+        .append(delim).append(std::to_string(i));
 
-    for(int i=0;i<args.size();i++){
-        stringa1[i] = args[i];
+        char* stringa1 = (char*) malloc((argsToThread.size()+1)*sizeof(char));
+
+        for(int j=0;j<argsToThread.size();j++){
+            stringa1[j] = argsToThread[j];
+        }
+        
+        stringa1[argsToThread.size()] = '\0';
+        //make a new thread and keep sending file from there
+        pthread_t threadForDownloadingChunk;
+        pthread_create(&threadForDownloadingChunk,NULL,getFileFrom,stringa1);
+        threadsForDownload.push_back(threadForDownloadingChunk);
+
     }
-
-    stringa1[args.size()] = '\0';
-    //make a new thread and keep sending file from there
-    pthread_t threadForSendingFile;
-    pthread_create(&threadForSendingFile,NULL,sendFile,stringa1);
-    //---------------------------------------------
-    */
+    for(auto t:threadsForDownload){
+        void** ret;
+        pthread_join(t,ret);
+    }
+    fclose(fileDownloadPointer[destinationPath]);
 }
 
 int getChunkSize(int chunkNo,int NoOfChunks,int fileSize){
